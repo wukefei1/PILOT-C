@@ -1,0 +1,10 @@
+logs/
+__pycache__/
+.vscode/
+bjMap/
+images/
+*.zip
+*.lprof
+*.txt
+test_compress
+test_compress.c

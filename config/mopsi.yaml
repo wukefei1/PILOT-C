@@ -1,0 +1,12 @@
+time_unit: 1
+
+drop_0:
+  dct_no_map:
+    block_size: 500
+    compression_ratio: 1
+    scale: 0.005
+    scale_length: 0.14
+    dynamic_ratio_flag: true
+
+  cised:
+    max_error: 60

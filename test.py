@@ -4,7 +4,7 @@ import numpy as np
 import wave
 import struct
 import math
-
+from utils import *
 
 bits_per_sample = 16
 max_sample_value = 2 ** (bits_per_sample - 1) - 1
@@ -146,3 +146,6 @@ sum_idct_x = np.cumsum(idct_x)
 print(np.sum(manual_ortho ** 2 * 2 * N))
 print(np.sum(X_ortho ** 2 * 2 * N))
 print(np.sum(X_default ** 2))
+
+
+print(bitarray2float(float2bitarray(0.6)))

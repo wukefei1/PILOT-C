@@ -3,10 +3,8 @@ time_unit: 0.02
 drop_0:
   dct_no_map:
     block_size: 1000
-    compression_ratio: 400
     scale: 50
     scale_length: 0.08
-    dynamic_ratio_flag: true
 
   cised:
     max_error: 0.3

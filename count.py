@@ -27,8 +27,8 @@ def count_file(path):
     while start_index < len(t_list):
         end_index = start_index
         while end_index < len(t_list) - 1 and \
-                t_list[end_index + 1] - t_list[end_index] < 60 and \
-                  np.sqrt(np.sum((traj[end_index + 1] - traj[end_index]) ** 2) / (t_list[end_index + 1] - t_list[end_index])) < 1000:
+                t_list[end_index + 1] - t_list[end_index] < 120 and \
+                  np.sqrt(np.sum((traj[end_index + 1] - traj[end_index]) ** 2) / (t_list[end_index + 1] - t_list[end_index])) < 200:
             end_index = end_index + 1
         
         if end_index - start_index <= 0:
@@ -42,7 +42,7 @@ def count_file(path):
     return len(other_points)
 
 def count_files():
-    path = '/home/wkf/data/PRESS/datasets/geolife'
+    path = '/home/wkf/data/PRESS/datasets/mopsi'
     tot_path = []
 
     for file_name in os.listdir(path):

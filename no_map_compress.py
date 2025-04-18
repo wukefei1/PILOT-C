@@ -30,7 +30,7 @@ def get_dp(compressed_result, length_bit, exp_bit):
         need_bits.append(temp_bits)
         max_bits = max(max_bits, temp_bits)
     max_bits = max_bits + 1
-    assert max_bits <= 32, "max_bits should not be greater than 32"
+    assert max_bits <= 2 ** exp_bit, "max_bits should not be greater than 2 ** exp_bit"
     
     dp = np.full((len(compressed_result) + 1, max_bits), np.inf).tolist()
     last_index = np.zeros((len(compressed_result) + 1, max_bits)).tolist()
@@ -115,16 +115,22 @@ class NoMapCompressor():
             os.makedirs(self.result_path)
         if data_source == 'nuplan':
             self.load_nuplan_traj()
+            self.time_accuracy = 0.01
         elif data_source == 'geolife':
             self.load_geolife_traj()
+            self.time_accuracy = 1
+        elif data_source == 'geolife_debug':
+            self.load_geolife_debug_traj()
+            self.time_accuracy = 1
         elif data_source == 'shangqi':
             self.load_shangqi_traj()
+            self.time_accuracy = 0.01
         elif data_source == 'mopsi':
             self.load_mopsi_traj()
-        elif data_source == 'uav':
-            self.load_uav_traj()
+            self.time_accuracy = 0.001
         elif data_source == 'geolife_3d':
             self.load_geolife_3d_traj()
+            self.time_accuracy = 1
         
         self.decompress_traj = None
         
@@ -259,6 +265,25 @@ class NoMapCompressor():
             
             self._save_cache_file(os.path.join(self.cache_path, 'cache.pkl'))
             
+    def load_geolife_debug_traj(self):
+        if not self._load_cache_file(os.path.join(self.cache_path, 'cache.pkl')):
+            data = [x.strip().split(",") for x in open(self.path).readlines()]
+            
+            traj = []
+            t_list = []
+            
+            for line in data:
+                t = np.float64(line[0])
+                x = np.float64(line[1])
+                y = np.float64(line[2])
+                t_list.append(t)
+                traj.append([x, y])
+            
+            self.traj = np.array(traj)
+            self.t_list = np.array(t_list)
+            
+            self._save_cache_file(os.path.join(self.cache_path, 'cache.pkl'))
+            
     def load_geolife_3d_traj(self):
         if not self._load_cache_file(os.path.join(self.cache_path, 'cache.pkl')):
             data = [x.strip().split(",") for x in open(self.path).readlines()]
@@ -309,6 +334,7 @@ class NoMapCompressor():
         max_error = np.max(error)
         mean_error = np.mean(error)
         self.argmax_error = int(np.argmax(error))
+        print(f"argmax_error: {self.argmax_error}")
         return {'max_error': float(max_error),
                 'mean_error': float(mean_error),
                 'compress_ratio': float((len(self.traj) * (len(self.traj[0]) + 1) * 8) / self.compress_bits * 8),
@@ -322,18 +348,26 @@ class NoMapCompressor():
         
         self.decompress_traj = np.array(self.decompress_traj)
         if self.traj.shape[1] == 2:
+            
             if argmax_error is None:
                 plt.scatter(self.traj[:, 0], self.traj[:, 1], label='origin', s=0.01)
                 plt.scatter(self.decompress_traj[:, 0], self.decompress_traj[:, 1], label='decompress', s=0.01)
+                path = f'images/{self.name}_total.png'
             else:
                 start_index = argmax_error - 60
                 end_index = argmax_error + 60
                 
                 plt.scatter(self.traj[start_index: end_index, 0], self.traj[start_index: end_index, 1], label='origin', s=0.1)
                 plt.scatter(self.decompress_traj[start_index: end_index, 0], self.decompress_traj[start_index: end_index, 1], label='decompress', s=0.1)
+                
+                for i in range(start_index, end_index):  # 连接对应点
+                    plt.plot([self.traj[i, 0], self.decompress_traj[i, 0]], [self.traj[i, 1], self.decompress_traj[i, 1]], 'k--', linewidth=0.1)  # 用虚线连接
+                    
+                path = f'images/{self.name}_local.png'
+                
             plt.axis('equal')    
             plt.legend()
-            plt.savefig(f'images/test_{self.name}.png', dpi=1000)
+            plt.savefig(path, dpi=1000)
             plt.gcf().clear()
         elif self.traj.shape[1] == 3:
             fig = plt.figure()
@@ -342,7 +376,7 @@ class NoMapCompressor():
             ax.scatter(self.decompress_traj[:, 0], self.decompress_traj[:, 1], self.decompress_traj[:, 2], label='decompress', s=0.1)
             ax.legend()
             ax.axis('equal')
-            plt.savefig(f'images/test_{self.name}.png', dpi=1000)
+            plt.savefig(f'images/{self.name}.png', dpi=1000)
             plt.gcf().clear()
                     
         
@@ -358,18 +392,24 @@ class DCTNoMapCompressor(NoMapCompressor):
             save_path = self.save_path
         
         block_size = kwargs['block_size'] if 'block_size' in kwargs else 300
-        compression_ratio = kwargs['compression_ratio'] if 'compression_ratio' in kwargs else None
-        dynamic_ratio_flag = kwargs['dynamic_ratio_flag'] if 'dynamic_ratio_flag' in kwargs else False
         scale = kwargs['scale'] if 'scale' in kwargs else 1
         scale_length = kwargs['scale_length'] if 'scale_length' in kwargs else 1
-        max_error = kwargs['max_error'] if'max_error' in kwargs else None
+        max_error = kwargs['max_error'] if 'max_error' in kwargs else None
+        max_accuracy_error = kwargs['max_accuracy_error'] if 'max_accuracy_error' in kwargs else 0.02 * max_error
+        time_bits = kwargs['time_bits'] if 'time_bits' in kwargs else 12
+        traj_bits = kwargs['traj_bits'] if 'traj_bits' in kwargs else 16
         
         self.scale_length = scale_length
         
         traj_dim = self.traj.shape[1]
-        max_bits = (traj_dim + 1) * 64 * len(self.traj) / compression_ratio // 8 * 8
+        max_error = bitarray2float(float2bitarray(max_error))
+        max_accuracy_error = bitarray2float(float2bitarray(max_accuracy_error))
+        max_error_dim = max_error / math.sqrt(traj_dim)
+        max_accuracy_error_dim = max_accuracy_error / math.sqrt(traj_dim)
+        max_needbits = 0
         
         other_points = []
+        error_points = []
         index_list = []
         
         start_index = 0
@@ -378,7 +418,7 @@ class DCTNoMapCompressor(NoMapCompressor):
             end_index = start_index
             while end_index < len(self.t_list) - 1 and \
                   self.t_list[end_index + 1] - self.t_list[end_index] < 120 and \
-                  np.sqrt(np.sum((self.traj[end_index + 1] - self.traj[end_index]) ** 2) / (self.t_list[end_index + 1] - self.t_list[end_index])) < 1000:
+                  np.sqrt(np.sum((self.traj[end_index + 1] - self.traj[end_index]) ** 2) / (self.t_list[end_index + 1] - self.t_list[end_index])) < 200:
                 end_index = end_index + 1
             
             if end_index - start_index <= 0:
@@ -388,220 +428,98 @@ class DCTNoMapCompressor(NoMapCompressor):
                 continue
             index_list.append([start_index, end_index])
             start_index = end_index + 1
-         
+        
+        last_real_value = [None for _ in range(traj_dim) ]
+        last_value = [None for _ in range(traj_dim) ]
+        
         result_list = []
-        tot_bits = 32 + (traj_dim + 1) * 64 * len(other_points) + 192 * (len(other_points) != len(self.traj))
-        max_bits = (traj_dim + 1) * 64 * (len(self.traj) - len(other_points)) / compression_ratio // 8 * 8 + (traj_dim + 1) * 64 * len(other_points)
-        
-        
-        if dynamic_ratio_flag:
-            all_compress_data = []
-            all_real_data = []
-            all_dp = []
-            all_last_index = []
-            all_length = []
-            all_mean = []
-            all_block_size = []
-            heap = []
-            index_dict = {}
-            for i in range(len(index_list)):
-                start_index, end_index = index_list[i]
-                temp_compress_data = [[] for _ in range(traj_dim)]
-                temp_real_data = [[] for _ in range(traj_dim)]
-                temp_dp = [[] for _ in range(traj_dim)]
-                temp_last_index = [[] for _ in range(traj_dim)]
-                temp_mean = [[] for _ in range(traj_dim)]
-                def cal_delta_old(start_index, end_index):
-                    temp_traj = []
-                    start_t = self.t_list[start_index]
-                    
-                    for i in range(start_index, end_index):
-                        min_t = int(np.ceil((self.t_list[i] - start_t) / self.time_unit))
-                        max_t = int(np.ceil((self.t_list[i + 1] - start_t) / self.time_unit)) + (1 if i == end_index - 1 else 0)
-                        for j in range(min_t, max_t):
-                            temp_t = start_t + j * self.time_unit
-                            temp = (temp_t - self.t_list[i]) / (self.t_list[i + 1] - self.t_list[i]) * (self.traj[i + 1] - self.traj[i]) + self.traj[i]
-                            temp_traj.append(temp)
-                    
-                    temp_traj = np.array(temp_traj)
-                    delta = temp_traj[1:] - temp_traj[:-1]
-                    return delta, temp_traj
+        for i in range(len(index_list)):
+            start_index, end_index = index_list[i]
+            def get_temp_traj(start_index, end_index):
+                temp_traj = []
+                start_t = self.t_list[start_index]
                 
-                delta, temp_traj = cal_delta_old(start_index, end_index)
+                for i in range(start_index, end_index):
+                    min_t = int(np.ceil((self.t_list[i] - start_t) / self.time_unit))
+                    max_t = int(np.ceil((self.t_list[i + 1] - start_t) / self.time_unit)) + (1 if i == end_index - 1 else 0)
+                    for j in range(min_t, max_t):
+                        temp_t = start_t + j * self.time_unit
+                        temp = (temp_t - self.t_list[i]) / (self.t_list[i + 1] - self.t_list[i]) * (self.traj[i + 1] - self.traj[i]) + self.traj[i]
+                        temp_traj.append(temp)
                 
-                length = end_index - start_index + 1
-                
-                temp_block_num = (len(delta) - 1) // block_size + 1
-                temp_block_size = (len(delta) - 1) // temp_block_num + 1
-                all_length.append(len(delta))
-                all_block_size.append(temp_block_size)
-                tot_bits = tot_bits + 128 + traj_dim * 64
-                
-                # for k in range(0, len(temp_traj), temp_block_size):
-                #     index = k // temp_block_size
-                #     xi, yi = temp_traj[k]
-                #     plt.annotate(f'{index}', (xi, yi), fontsize=3)
-                # plt.scatter(temp_traj[::temp_block_size, 0], temp_traj[::temp_block_size, 1], label='divide', s=1)
-                # plt.scatter(temp_traj[:, 0], temp_traj[:, 1], label='origin', s=0.1)
-                # plt.axis('equal')    
-                # plt.legend()
-                # plt.savefig(f'images/test_{i}_block{temp_block_size}.png', dpi=1000)
-                # plt.gcf().clear()
-                
-                length_bit = max(0, math.ceil(math.log2(temp_block_size * scale_length)))
-                
-                for dim in range(traj_dim):
-                    for block_id in range(temp_block_num):
-                        block_data = delta[block_id * temp_block_size: min((block_id + 1) * temp_block_size, len(delta)), dim]
-                        mean = np.mean(block_data)
-                        block_data = block_data - mean
-                        
-                        dctn_data = dctn(block_data)
-                        compressed_data = []
-                        index = int((len(dctn_data) - 1) * scale_length)
-                        while int(np.round(dctn_data[index] * scale)) == 0 and index > 0:
-                            index = index - 1
-                        
-                        compressed_data = np.round(dctn_data[1: index + 1] * scale).astype(int).tolist()
-                        
-                        dp, last_index = get_dp(compressed_data, length_bit, 5)
-                        temp_compress_data[dim].append(compressed_data)
-                        temp_real_data[dim].append(dctn_data)
-                        temp_dp[dim].append(dp)
-                        temp_last_index[dim].append(last_index)
-                        temp_mean[dim].append(mean)
-                        tot_bits = tot_bits + min(dp[index]) + length_bit + 32
-                        if index > 0:
-                            heapq.heappush(heap, (-index / temp_block_size, i, dim, block_id, index))
-                        else:
-                            index_dict[(i, dim, block_id)] = 0
-                
-                all_dp.append(temp_dp)
-                all_last_index.append(temp_last_index)
-                all_compress_data.append(temp_compress_data)
-                all_real_data.append(temp_real_data)
-                all_mean.append(temp_mean)
+                temp_traj = np.array(temp_traj)
+                return temp_traj
             
-            while len(heap) > 0 and tot_bits > max_bits:
-                heap_top = heapq.heappop(heap)
-                ratio = heap_top[0]
-                i = heap_top[1]
-                dim = heap_top[2]
-                block_id = heap_top[3]
-                index = heap_top[4]
-                
-                tot_bits = tot_bits - min(all_dp[i][dim][block_id][index]) + min(all_dp[i][dim][block_id][index - 1])
-                if index - 1 > 0:
-                    heapq.heappush(heap, (-(index - 1) / all_block_size[i], i, dim, block_id, index - 1))
-                else:
-                    index_dict[(i, dim, block_id)] = 0
-                    
-            while heap:
-                heap_top = heapq.heappop(heap)
-                i = heap_top[1]
-                dim = heap_top[2]
-                block_id = heap_top[3]
-                index = heap_top[4]
-                
-                index_dict[(i, dim, block_id)] = index
-                
-            for i in range(len(index_list)):
-                start_index, end_index = index_list[i]
-                temp_dp = all_dp[i]
-                temp_last_index = all_last_index[i]
-                temp_compress_data = all_compress_data[i]
-                temp_mean = all_mean[i]
-                
-                result = [[] for _ in range(traj_dim)]
-                
-                for dim in range(traj_dim):
-                    for block_id in range(len(temp_dp[dim])):
-                        dp = temp_dp[dim][block_id]
-                        last_index = temp_last_index[dim][block_id]
-                        compressed_dim = temp_compress_data[dim][block_id]
-                        index = index_dict[(i, dim, block_id)]
-                        compressed_result = get_compressed_result(compressed_dim, dp, last_index, index)
-                        result[dim].append([compressed_result, temp_mean[dim][block_id]])
-                
-                result_list.append([start_index, all_block_size[i], all_length[i], result])
+            temp_traj = get_temp_traj(start_index, end_index)
             
-            self.compress_bits = tot_bits
-        else:
-            for i in range(len(index_list)):
-                start_index, end_index = index_list[i]
-                def cal_delta_old(start_index, end_index):
-                    temp_traj = []
-                    start_t = self.t_list[start_index]
-                    
-                    for i in range(start_index, end_index):
-                        min_t = int(np.ceil((self.t_list[i] - start_t) / self.time_unit))
-                        max_t = int(np.ceil((self.t_list[i + 1] - start_t) / self.time_unit)) + (1 if i == end_index - 1 else 0)
-                        for j in range(min_t, max_t):
-                            temp_t = start_t + j * self.time_unit
-                            temp = (temp_t - self.t_list[i]) / (self.t_list[i + 1] - self.t_list[i]) * (self.traj[i + 1] - self.traj[i]) + self.traj[i]
-                            temp_traj.append(temp)
-                    
-                    temp_traj = np.array(temp_traj)
-                    delta = temp_traj[1:] - temp_traj[:-1]
-                    return delta
-                
-                delta = cal_delta_old(start_index, end_index)
-                
-                length = end_index - start_index + 1
-                result = [[] for _ in range(traj_dim)]
-                
-                temp_block_num = (len(delta) - 1) // block_size + 1
-                temp_block_size = (len(delta) - 1) // temp_block_num + 1
-                
-                length_bit = max(0, math.ceil(math.log2(temp_block_size * scale_length)))
-                
-                temp_max_bits = ((traj_dim + 1) * 64 * length / compression_ratio - 160 / len(self.traj) * length) - (128 + 64 * traj_dim)
-                tot_bits = tot_bits + (128 + 64 * traj_dim)
-                
+            temp_block_num = (len(temp_traj) - 2) // block_size + 1
+            temp_block_size = (len(temp_traj) - 2) // temp_block_num + 1
+            
+            for dim in range(traj_dim):
+                if last_real_value[dim] is None:
+                    last_real_value[dim] = self.traj[start_index][dim]
+                    last_value[dim] = self.traj[start_index][dim]
+            
+            for block_id in range(temp_block_num + 1):
+                temp_point = temp_traj[min((block_id) * temp_block_size, len(temp_traj) - 1)]
                 for dim in range(traj_dim):
-                    for block_id in range(temp_block_num):
-                        block_dim = delta[block_id * temp_block_size: min((block_id + 1) * temp_block_size, len(delta)), dim]
-                        mean = np.mean(block_dim)
-                        block_dim = block_dim - mean
+                    if count_bits(round((temp_point[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2) - round((last_value[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2)) <= traj_bits:
+                        temp_traj[min((block_id) * temp_block_size, len(temp_traj) - 1)][dim] = round((temp_point[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2) * max_accuracy_error_dim * 2 + last_real_value[dim]
+                    else:
+                        last_real_value[dim] = temp_traj[min((block_id) * temp_block_size, len(temp_traj) - 1)][dim]
                         
-                        dctn_dim = dctn(block_dim)
-                        compressed_dim = []
-                        index = int((len(dctn_dim) - 1) * scale_length)
-                        while int(np.round(dctn_dim[index] * scale)) == 0 and index > 0:
-                            index = index - 1
-                        
-                        for j in range(1, index + 1):
-                            compressed_dim.append(int(np.round(dctn_dim[j] * scale)))
-                        
-                        dp, last_index = get_dp(compressed_dim, length_bit, 5)
-                        lossless_compressed_dim, bit_cnt = lossless_compress(compressed_dim, length_bit, 5, temp_max_bits * len(block_dim) / len(delta) / 2 - 40)
-                        tot_bits = tot_bits + bit_cnt + length_bit + 32
-                        result[dim].append([lossless_compressed_dim, mean])
-                
-                result_list.append([start_index, temp_block_size, len(delta), result])
-        
+                    last_value[dim] = temp_traj[min((block_id) * temp_block_size, len(temp_traj) - 1)][dim]
+                    assert (round((temp_traj[min((block_id) * temp_block_size, len(temp_traj) - 1)][dim] - last_real_value[dim]) / max_accuracy_error_dim / 2) - \
+                            round((last_value[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2)) * max_accuracy_error_dim * 2 + last_value[dim] == temp_traj[min((block_id) * temp_block_size, len(temp_traj) - 1)][dim]
+            
+            delta = temp_traj[1:] - temp_traj[:-1]
+            
+            result = [[] for _ in range(traj_dim)]
+            
+            length_bit = max(0, math.ceil(math.log2(temp_block_size * scale_length)))
+            
+            for dim in range(traj_dim):
+                for block_id in range(temp_block_num):
+                    block_dim = delta[block_id * temp_block_size: min((block_id + 1) * temp_block_size, len(delta)), dim]
+                    mean = np.mean(block_dim)
+                    block_dim = block_dim - mean
+                    
+                    dctn_dim = dctn(block_dim)
+                    compressed_dim = []
+                    index = int((len(dctn_dim) - 1) * scale_length)
+                    while int(np.round(dctn_dim[index] * scale)) == 0 and index > 0:
+                        index = index - 1
+                    
+                    for j in range(1, index + 1):
+                        compressed_dim.append(int(np.round(dctn_dim[j] * scale)))
+                    
+                    lossless_compressed_dim, bit_cnt = lossless_compress(compressed_dim, length_bit, 4)
+                    result[dim].append([lossless_compressed_dim, temp_traj[min((block_id + 1) * temp_block_size, len(temp_traj) - 1), dim]])
+                    
+            result_list.append([self.t_list[start_index], temp_traj[0], temp_block_size, len(delta), result])
+
         if max_error is not None:
             decompress_traj0 = []
             t_list0 = []
             for i in range(len(result_list)):
-                start_index = result_list[i][0]
-                start_t = self.t_list[start_index]
-                start_point = self.traj[start_index]
-                block_size = result_list[i][1]
-                delta_num = result_list[i][2]
-                result = result_list[i][3]
+                start_t = result_list[i][0]
+                start_point = result_list[i][1]
+                temp_block_size = result_list[i][2]
+                delta_num = result_list[i][3]
+                result = result_list[i][4]
                 
-                tot_idct = np.array([[] for _ in range(traj_dim)])
-                for dim in range(self.traj.shape[1]):
+                tot_idct = [[] for _ in range(traj_dim)]
+                for dim in range(traj_dim):
                     for i in range(len(result[dim])):
                         compressed_dim = []
                         for _, data in result[dim][i][0]:
                             compressed_dim.extend(data)
-                        mean = np.float32(result[dim][i][1])
-                        compressed_dim = np.pad(compressed_dim, (1, min(block_size, delta_num - block_size * i) - len(compressed_dim) - 1), 'constant')
-                        idct_dim = idctn(compressed_dim / scale)
+                        mean = (result[dim][i][1] - (result[dim][i - 1][1] if i > 0 else start_point[dim])) / min(temp_block_size, delta_num - temp_block_size * i)
+                        compressed_dim = np.pad(compressed_dim, (1, min(temp_block_size, delta_num - temp_block_size * i) - len(compressed_dim) - 1), 'constant')
+                        idct_dim = idctn(compressed_dim / np.float32(scale))
                         idct_dim = idct_dim + mean
-                        tot_idct[dim] = np.concatenate((tot_idct[dim], idct_dim))
+                        tot_idct[dim].extend(idct_dim)
+                tot_idct = np.array(tot_idct).T
                 
                 if len(t_list0) > 0 and start_t <= t_list0[-1]:
                     decompress_traj0.pop()
@@ -646,50 +564,130 @@ class DCTNoMapCompressor(NoMapCompressor):
             
             error = np.sqrt(np.sum((self.traj - all_decompress_traj) ** 2, axis=1))
             error_cnt = np.where(error > max_error)[0]
-            for i in error_cnt:
-                other_points.append(i)
+            max_needbits = 0
             
-            other_points.sort()
+            for i in error_cnt:
+                error_point = []
+                delta_point = self.traj[i] - all_decompress_traj[i]
+                for j in range(traj_dim):
+                    delta_dim = delta_point[j]
+                    value_dim = round(delta_dim / max_error_dim / 2)
+                    max_needbits = max(max_needbits, count_bits(value_dim))
+                    error_point.append(value_dim)
+                
+                error_point.append(self.t_list[i])
+                error_points.append(error_point)
+                
         
         if save:
             with open(save_path, 'wb') as f:
                 write_bits = bitarray()
                 write_bits.extend(signint2bitarray(len(result_list), 32))
+                write_bits.extend(signint2bitarray(time_bits, 6))
+                write_bits.extend(signint2bitarray(max_needbits, 6))
+                write_bits.extend(signint2bitarray(traj_bits, 6))
+                write_bits.extend(double2bitarray(self.time_accuracy))
+                write_bits.extend(float2bitarray(max_error))
+                write_bits.extend(float2bitarray(max_accuracy_error))
                 if len(result_list) != 0:
-                    write_bits.extend(double2bitarray(self.time_unit))
-                    write_bits.extend(double2bitarray(scale))
-                    write_bits.extend(double2bitarray(scale_length))
+                    write_bits.extend(float2bitarray(self.time_unit))
+                    write_bits.extend(float2bitarray(scale))
+                    write_bits.extend(float2bitarray(scale_length))
+                    write_bits.extend(signint2bitarray(block_size, 32))
+                    
+                last_real_value = [None for i in range(traj_dim)]
+                last_value = [None for i in range(traj_dim)]
                 
                 for i in range(len(result_list)):
-                    start_index = result_list[i][0]
-                    temp_block_size = result_list[i][1]
-                    delta_num = result_list[i][2]
-                    result = result_list[i][3]
+                    start_t = result_list[i][0]
+                    start_point = result_list[i][1]
+                    temp_block_size = result_list[i][2]
+                    delta_num = result_list[i][3]
+                    result = result_list[i][4]
                     
                     length_bit = max(0, math.ceil(math.log2(temp_block_size * scale_length)))
-                
-                    write_bits.extend(double2bitarray(self.t_list[start_index]))
-                    write_bits.extend(signint2bitarray(temp_block_size, 32))
+                    if i == 0 or (start_t - result_list[i - 1][0]) / self.time_accuracy > (2 ** time_bits - 1):
+                        write_bits.extend(bitarray('0'))
+                        write_bits.extend(double2bitarray(start_t))
+                    else:
+                        write_bits.extend(bitarray('1'))
+                        write_bits.extend(signint2bitarray(round((start_t - result_list[i - 1][0]) / self.time_accuracy), time_bits))
                     write_bits.extend(signint2bitarray(delta_num, 32))
                     
+                    
                     for dim in range(traj_dim):
-                        write_bits.extend(double2bitarray(self.traj[start_index][dim]))
+                        if last_real_value[dim] == None or count_bits(round((start_point[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2) - \
+                                                                      round((last_value[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2)) > traj_bits:
+                            write_bits.extend(bitarray('0'))
+                            write_bits.extend(double2bitarray(start_point[dim]))
+                            last_real_value[dim] = start_point[dim]
+                            last_value[dim] = start_point[dim]
+                        else:
+                            write_bits.extend(bitarray('1'))
+                            write_bits.extend(signint2bitarray(round((start_point[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2) - \
+                                                               round((last_value[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2), traj_bits))
+                            last_value[dim] = start_point[dim]
+                            assert (round((start_point[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2) - round((last_value[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2)) * max_accuracy_error_dim * 2 + last_value[dim] == start_point[dim], \
+                                    ((round((start_point[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2) - round((last_value[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2)) * max_accuracy_error_dim * 2 + last_value[dim], start_point[dim])
+                                
+                    for i in range(len(result[dim])):
+                        for dim in range(traj_dim):
+                            if last_real_value[dim] == None or count_bits(round((result[dim][i][1] - last_real_value[dim]) / max_accuracy_error_dim / 2) - \
+                                                                          round((last_value[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2)) > traj_bits:
+                                write_bits.extend(bitarray('0'))
+                                write_bits.extend(double2bitarray(result[dim][i][1]))
+                                last_real_value[dim] = result[dim][i][1]
+                                last_value[dim] = result[dim][i][1]
+                            else:
+                                write_bits.extend(bitarray('1'))
+                                write_bits.extend(signint2bitarray(round((result[dim][i][1] - last_real_value[dim]) / max_accuracy_error_dim / 2) - \
+                                                                   round((last_value[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2), traj_bits))
+                                last_value[dim] = result[dim][i][1]
+                                assert (round((result[dim][i][1] - last_real_value[dim]) / max_accuracy_error_dim / 2) - round((last_value[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2)) * max_accuracy_error_dim * 2 + last_value[dim] == result[dim][i][1], \
+                                       ((round((result[dim][i][1] - last_real_value[dim]) / max_accuracy_error_dim / 2) - round((last_value[dim] - last_real_value[dim]) / max_accuracy_error_dim / 2)) * max_accuracy_error_dim * 2 + last_value[dim], result[dim][i][1])
+                    for dim in range(traj_dim):
                         for i in range(len(result[dim])):
                             write_bits.extend(signint2bitarray(len(result[dim][i][0]), length_bit))
                             for j in range(len(result[dim][i][0])):
-                                write_bits.extend(signint2bitarray(result[dim][i][0][j][0], 5))
+                                write_bits.extend(signint2bitarray(result[dim][i][0][j][0], 4))
                                 write_bits.extend(signint2bitarray(len(result[dim][i][0][j][1]), length_bit))
                                 for k in range(len(result[dim][i][0][j][1])):
                                     write_bits.extend(signint2bitarray(result[dim][i][0][j][1][k], result[dim][i][0][j][0]))
-                            write_bits.extend(float2bitarray(result[dim][i][1]))
-                        
-                for i in range(len(other_points)):
-                    write_bits.extend(double2bitarray(self.t_list[other_points[i]]))
-                    for dim in range(traj_dim):
-                        write_bits.extend(double2bitarray(self.traj[other_points[i]][dim]))
                 
+                write_bits.extend(signint2bitarray(len(error_points), 32))
+                for i in range(len(error_points)):
+                    if i == 0 or (error_points[i][-1] - error_points[i - 1][-1]) / self.time_accuracy > (2 ** time_bits - 1):
+                        write_bits.extend(bitarray('0'))
+                        write_bits.extend(double2bitarray(error_points[i][-1]))
+                    else:
+                        write_bits.extend(bitarray('1'))
+                        write_bits.extend(signint2bitarray(round((error_points[i][-1] - error_points[i - 1][-1]) / self.time_accuracy), time_bits))
+                    
+                    for dim in range(traj_dim):
+                        write_bits.extend(signint2bitarray(error_points[i][dim], max_needbits))
+                
+                # write_bits.extend(signint2bitarray(len(other_points), 32))
+                last_index = [0 for i in range(traj_dim)]
+                for i in range(len(other_points)):
+                    if i == 0 or (self.t_list[other_points[i]] - self.t_list[other_points[i - 1]]) / self.time_accuracy > (2 ** time_bits - 1):
+                        write_bits.extend(bitarray('0'))
+                        write_bits.extend(double2bitarray(self.t_list[other_points[i]]))
+                    else:
+                        write_bits.extend(bitarray('1'))
+                        write_bits.extend(signint2bitarray(round((self.t_list[other_points[i]] - self.t_list[other_points[i - 1]]) / self.time_accuracy), time_bits))
+                    
+                    for dim in range(traj_dim):
+                        if i == 0 or count_bits(round((self.traj[other_points[i]][dim] - self.traj[other_points[last_index[dim]]][dim]) / max_error_dim / 2) - \
+                                                round((self.traj[other_points[i - 1]][dim] - self.traj[other_points[last_index[dim]]][dim]) / max_error_dim / 2)) > traj_bits:
+                            write_bits.extend(bitarray('0'))
+                            write_bits.extend(double2bitarray(self.traj[other_points[i]][dim]))
+                            last_index[dim] = i
+                        else:
+                            write_bits.extend(bitarray('1'))
+                            write_bits.extend(signint2bitarray(round((self.traj[other_points[i]][dim] - self.traj[other_points[last_index[dim]]][dim]) / max_error_dim / 2) - \
+                                                               round((self.traj[other_points[i - 1]][dim] - self.traj[other_points[last_index[dim]]][dim]) / max_error_dim / 2), traj_bits))
+
                 self.compress_bits = len(write_bits)
-                assert self.compress_bits == tot_bits, (self.compress_bits, tot_bits)
                 write_bits.tofile(f)
     
     @profile
@@ -706,63 +704,139 @@ class DCTNoMapCompressor(NoMapCompressor):
             
             num = bitarray2signint(read_bits[read_index:read_index+32], False)
             read_index += 32
+            time_bits = bitarray2signint(read_bits[read_index:read_index+6], False)
+            read_index += 6
+            length_bits_errors = bitarray2signint(read_bits[read_index:read_index+6], False)
+            read_index += 6
+            length_bits_others = bitarray2signint(read_bits[read_index:read_index+6], False)
+            read_index += 6
+            time_accuracy = bitarray2double(read_bits[read_index:read_index+64])
+            read_index += 64
+            max_error = bitarray2float(read_bits[read_index:read_index+32])
+            read_index += 32
+            max_accuracy_error = bitarray2float(read_bits[read_index:read_index+32])
+            read_index += 32
+            
             other_points = []
+            error_points = []
             traj_dim = self.traj.shape[1]
+            max_error_dim = max_error / math.sqrt(traj_dim)
+            max_accuracy_error_dim = max_accuracy_error / math.sqrt(traj_dim)
             
             if num != 0:
-                time_unit = bitarray2double(read_bits[read_index:read_index+64])
-                read_index += 64
-                scale = bitarray2double(read_bits[read_index:read_index+64])
-                read_index += 64
-                scale_length = bitarray2double(read_bits[read_index:read_index+64])
-                read_index += 64
-            
-            for i in range(num):
-                start_t = bitarray2double(read_bits[read_index:read_index+64])
-                read_index += 64
+                time_unit = bitarray2float(read_bits[read_index:read_index+32])
+                read_index += 32
+                scale = bitarray2float(read_bits[read_index:read_index+32])
+                read_index += 32
+                scale_length = bitarray2float(read_bits[read_index:read_index+32])
+                read_index += 32
                 block_size = bitarray2signint(read_bits[read_index:read_index+32], False)
                 read_index += 32
+            
+            last_real_value = [None for i in range(traj_dim)]
+            last_value = [None for i in range(traj_dim)]
+            for i in range(num):
+                type = bitarray2signint(read_bits[read_index:read_index+1], False)
+                read_index += 1
+                if type == 0:
+                    start_t = bitarray2double(read_bits[read_index:read_index+64])
+                    read_index += 64
+                else:
+                    time_num = bitarray2signint(read_bits[read_index:read_index+time_bits], False)
+                    read_index += time_bits
+                    start_t = result_list[-1][0] + time_num * time_accuracy
+                    
                 delta_num = bitarray2signint(read_bits[read_index:read_index+32], False)
                 read_index += 32
                 
-                result_num = (delta_num - 1) // block_size + 1
-                length_bit = max(0, math.ceil(math.log2(block_size * scale_length)))
+                temp_block_num = (delta_num - 1) // block_size + 1
+                temp_block_size = (delta_num - 1) // temp_block_num + 1
                 
-                start_point = []
+                length_bit = max(0, math.ceil(math.log2(temp_block_size * scale_length)))
+                
                 result = []
                 
+                point_list = []
+                
+                for _ in range(temp_block_num + 1):
+                    point = []
+                    for dim in range(traj_dim):
+                        type = bitarray2signint(read_bits[read_index:read_index+1], False)
+                        read_index += 1
+                        if type == 0:
+                            point.append(bitarray2double(read_bits[read_index:read_index+64]))
+                            read_index += 64
+                            last_real_value[dim] = point[-1]
+                            last_value[dim] = point[-1]
+                        else:
+                            traj_num = bitarray2signint(read_bits[read_index:read_index+length_bits_others])
+                            read_index += length_bits_others
+                            point.append(last_value[dim] + traj_num * max_accuracy_error_dim * 2)
+                            last_value[dim] = point[-1]
+                    point_list.append(point)
+                
                 for dim in range(traj_dim):
-                    start_dim = bitarray2double(read_bits[read_index:read_index+64])
-                    read_index += 64
                     result_dim = []
-                    for _ in range(result_num):
+                    for block_id in range(temp_block_num):
                         block_dim_num = bitarray2signint(read_bits[read_index:read_index+length_bit], False)
                         read_index += length_bit
                         compressed_dim = []
                         for j in range(block_dim_num):
-                            bits = bitarray2signint(read_bits[read_index:read_index+5], False)
-                            read_index += 5
+                            bits = bitarray2signint(read_bits[read_index:read_index+4], False)
+                            read_index += 4
                             temp_dim_num = bitarray2signint(read_bits[read_index:read_index+length_bit], False)
                             read_index += length_bit
                             for k in range(temp_dim_num):
                                 compressed_dim.append(bitarray2signint(read_bits[read_index:read_index+bits]))
                                 read_index += bits
-                        mean = bitarray2float(read_bits[read_index:read_index+32])
-                        read_index += 32
-                        result_dim.append([compressed_dim, mean])
-                    start_point.append(start_dim)
+                        result_dim.append([compressed_dim, point_list[block_id + 1][dim]])
                     result.append(result_dim)
                 
-                result_list.append([start_t, start_point, block_size, delta_num, result])
-                
-            while read_index < len(read_bits) - 8:
-                t = bitarray2double(read_bits[read_index:read_index+64])
-                read_index += 64
+                result_list.append([start_t, point_list[0], temp_block_size, delta_num, result])
+            
+            error_points_num = bitarray2signint(read_bits[read_index:read_index+32], False)
+            read_index += 32
+            for i in range(error_points_num):
+                type = bitarray2signint(read_bits[read_index:read_index+1], False)
+                read_index += 1
+                if type == 0:
+                    t = bitarray2double(read_bits[read_index:read_index+64])
+                    read_index += 64
+                else:
+                    time_num = bitarray2signint(read_bits[read_index:read_index+time_bits], False)
+                    read_index += time_bits
+                    t = error_points[-1][0] + time_num * time_accuracy
                 point = []
                 
-                for i in range(traj_dim):
-                    point.append(bitarray2double(read_bits[read_index:read_index+64]))
+                for j in range(traj_dim):
+                    point.append(bitarray2signint(read_bits[read_index:read_index+length_bits_errors]) * max_error_dim * 2)
+                    read_index += length_bits_errors
+                error_points.append([t, point])
+                    
+            
+            while read_index < len(read_bits) - 8:
+                type = bitarray2signint(read_bits[read_index:read_index+1], False)
+                read_index += 1
+                if type == 0:
+                    t = bitarray2double(read_bits[read_index:read_index+64])
                     read_index += 64
+                else:
+                    time_num = bitarray2signint(read_bits[read_index:read_index+time_bits], False)
+                    read_index += time_bits
+                    t = other_points[-1][0] + time_num * time_accuracy
+                point = []
+                
+                for dim in range(traj_dim):
+                    type = bitarray2signint(read_bits[read_index:read_index+1], False)
+                    read_index += 1
+                    if type == 0:
+                        value_dim = bitarray2double(read_bits[read_index:read_index+64])
+                        read_index += 64
+                    else:
+                        traj_num = bitarray2signint(read_bits[read_index:read_index+length_bits_others])
+                        read_index += length_bits_others
+                        value_dim = other_points[-1][-1][dim] + traj_num * max_error_dim * 2
+                    point.append(value_dim)
                 other_points.append([t, point])
         
         decompress_traj0 = []
@@ -770,16 +844,16 @@ class DCTNoMapCompressor(NoMapCompressor):
         for i in range(len(result_list)):
             start_t = result_list[i][0]
             start_point = result_list[i][1]
-            block_size = result_list[i][2]
+            temp_block_size = result_list[i][2]
             delta_num = result_list[i][3]
             result = result_list[i][4]
             
             tot_idct = [[] for _ in range(traj_dim)]
-            for dim in range(self.traj.shape[1]):
+            for dim in range(traj_dim):
                 for i in range(len(result[dim])):
                     compressed_dim = result[dim][i][0]
-                    mean = np.float32(result[dim][i][1])
-                    compressed_dim = np.pad(compressed_dim, (1, min(block_size, delta_num - block_size * i) - len(compressed_dim) - 1), 'constant')
+                    mean = (result[dim][i][1] - (result[dim][i - 1][1] if i > 0 else start_point[dim])) / min(temp_block_size, delta_num - temp_block_size * i)
+                    compressed_dim = np.pad(compressed_dim, (1, min(temp_block_size, delta_num - temp_block_size * i) - len(compressed_dim) - 1), 'constant')
                     idct_dim = idctn(compressed_dim / scale)
                     idct_dim = idct_dim + mean
                     tot_idct[dim].extend(idct_dim)
@@ -808,12 +882,16 @@ class DCTNoMapCompressor(NoMapCompressor):
         if len(t_list0) > 0:
             index0 = 0
             index1 = 0
+            index2 = 0
             for i in range(len(self.t_list)):
                 t = self.t_list[i]
                 while index0 < len(t_list0) - 1 and t_list0[index0 + 1] - t < -1e-4:
                     index0 = index0 + 1
                 while index1 < len(t_list1) and t_list1[index1] - t < -1e-4:
                     index1 = index1 + 1
+                    
+                while index2 < len(error_points) and error_points[index2][0] - t < -1e-4:
+                    index2 = index2 + 1
                     
                 if index0 == len(t_list0) - 1:
                     temp_point = decompress_traj0[index0]
@@ -824,6 +902,9 @@ class DCTNoMapCompressor(NoMapCompressor):
                     self.decompress_traj.append(decompress_traj1[index1])
                 else:
                     self.decompress_traj.append(temp_point)
+                    
+                if index2 != len(error_points) and abs(error_points[index2][0] - t) < 1e-4:
+                    self.decompress_traj[-1] += np.array(error_points[index2][1])
         else:
             self.decompress_traj = decompress_traj1
         self.decompress_traj = np.array(self.decompress_traj)
@@ -838,8 +919,16 @@ class CISEDSCompressor(NoMapCompressor):
         if save_path is None:
             save_path = self.save_path
             
-        max_error = kwargs['max_error'] if 'max_error' in kwargs else 0.3
+        max_error = kwargs['max_error'] if 'max_error' in kwargs else 60
         polygon_num = kwargs['polygon_num'] if 'polygon_num' in kwargs else 16
+        
+        max_accuracy_error = kwargs['max_accuracy_error'] if 'max_accuracy_error' in kwargs else 10
+        max_error_dim = max_accuracy_error / math.sqrt(2)
+        
+        max_error = max_error - max_accuracy_error
+        
+        time_bits = kwargs['time_bits'] if 'time_bits' in kwargs else 32
+        traj_bits = kwargs['traj_bits'] if 'traj_bits' in kwargs else 16
         
         from shapely.geometry import Polygon
         
@@ -868,33 +957,18 @@ class CISEDSCompressor(NoMapCompressor):
         
         if save:
             with open(save_path, 'wb') as f:
-                # write_bits = bitarray()
-                
-                # for i in range(0, len(index_list)):
-                #     if i == 0 or \
-                #         self.traj[index_list[i]][0] - self.traj[index_list[i - 1]][0] > 1e5 or \
-                #         self.traj[index_list[i]][1] - self.traj[index_list[i - 1]][1] > 1e5 or \
-                #         self.t_list[index_list[i]] - self.t_list[index_list[i - 1]] > 1e5:
-                #         write_bits.extend(bitarray('0'))
-                #         write_bits.extend(double2bitarray(self.t_list[index_list[i]]))
-                #         write_bits.extend(double2bitarray(self.traj[index_list[i]][0]))
-                #         write_bits.extend(double2bitarray(self.traj[index_list[i]][1]))
-                #     else:
-                #         write_bits.extend(bitarray('1'))
-                #         write_bits.extend(float2bitarray(self.t_list[index_list[i]] - self.t_list[index_list[i - 1]]))
-                #         write_bits.extend(float2bitarray(self.traj[index_list[i]][0] - self.traj[index_list[i - 1]][0]))
-                #         write_bits.extend(float2bitarray(self.traj[index_list[i]][1] - self.traj[index_list[i - 1]][1]))
-                # self.compress_bits = len(write_bits)
-                # write_bits.tofile(f)
-                
-                
                 write_bits = bitarray()
+                
+                write_bits.extend(double2bitarray(self.time_accuracy))
+                write_bits.extend(float2bitarray(max_accuracy_error))
+                write_bits.extend(signint2bitarray(time_bits, 6))
+                write_bits.extend(signint2bitarray(traj_bits, 6))
                 
                 for i in range(0, len(index_list)):
                     if i == 0 or \
-                        self.traj[index_list[i]][0] - self.traj[index_list[last_index]][0] > 1e5 or \
-                        self.traj[index_list[i]][1] - self.traj[index_list[last_index]][1] > 1e5 or \
-                        self.t_list[index_list[i]] - self.t_list[index_list[last_index]] > 1e5:
+                        count_bits(round((self.traj[index_list[i]][0] - self.traj[index_list[last_index]][0]) / max_error_dim / 2) - round((self.traj[index_list[i - 1]][0] - self.traj[index_list[last_index]][0])) / max_error_dim / 2) > traj_bits or \
+                        count_bits(round((self.traj[index_list[i]][1] - self.traj[index_list[last_index]][1]) / max_error_dim / 2) - round((self.traj[index_list[i - 1]][1] - self.traj[index_list[last_index]][1])) / max_error_dim / 2) > traj_bits or \
+                        self.t_list[index_list[i]] - self.t_list[index_list[i - 1]] > (2 ** time_bits - 1) * self.time_accuracy:
                         write_bits.extend(bitarray('0'))
                         write_bits.extend(double2bitarray(self.t_list[index_list[i]]))
                         write_bits.extend(double2bitarray(self.traj[index_list[i]][0]))
@@ -903,9 +977,16 @@ class CISEDSCompressor(NoMapCompressor):
                         last_index = i
                     else:
                         write_bits.extend(bitarray('1'))
-                        write_bits.extend(float2bitarray(self.t_list[index_list[i]] - self.t_list[index_list[last_index]]))
-                        write_bits.extend(float2bitarray(self.traj[index_list[i]][0] - self.traj[index_list[last_index]][0]))
-                        write_bits.extend(float2bitarray(self.traj[index_list[i]][1] - self.traj[index_list[last_index]][1]))
+                        
+                        temp_t = round((self.t_list[index_list[i]] - self.t_list[index_list[i - 1]]) / self.time_accuracy)
+                        temp_x = round((self.traj[index_list[i]][0] - self.traj[index_list[last_index]][0]) / max_error_dim / 2) - round((self.traj[index_list[i - 1]][0] - self.traj[index_list[last_index]][0]) / max_error_dim / 2)
+                        temp_y = round((self.traj[index_list[i]][1] - self.traj[index_list[last_index]][1]) / max_error_dim / 2) - round((self.traj[index_list[i - 1]][1] - self.traj[index_list[last_index]][1]) / max_error_dim / 2)
+                        
+                        write_bits.extend(signint2bitarray(temp_t, time_bits))
+                        write_bits.extend(signint2bitarray(temp_x, traj_bits))
+                        write_bits.extend(signint2bitarray(temp_y, traj_bits))
+                        
+                        
                 self.compress_bits = len(write_bits)
                 write_bits.tofile(f)
         
@@ -922,6 +1003,16 @@ class CISEDSCompressor(NoMapCompressor):
             
             t_list = []
             point_list = []
+            time_accuracy = bitarray2double(read_bits[read_index:read_index+64])
+            read_index += 64
+            max_accuracy_error = bitarray2float(read_bits[read_index:read_index+32])
+            read_index += 32
+            max_error_dim = max_accuracy_error / math.sqrt(2)
+            time_bits = bitarray2signint(read_bits[read_index:read_index+6], False)
+            read_index += 6
+            traj_bits = bitarray2signint(read_bits[read_index:read_index+6], False)
+            read_index += 6
+            
             while read_index < len(read_bits) - 8:
                 type = bitarray2signint(read_bits[read_index:read_index+1], False)
                 read_index += 1
@@ -934,20 +1025,15 @@ class CISEDSCompressor(NoMapCompressor):
                     read_index += 64
                     t_list.append(t)
                     point_list.append([x, y])
-                    last_t = t
-                    last_x = x
-                    last_y = y
                 else:
-                    t = bitarray2float(read_bits[read_index:read_index+32])
-                    read_index += 32
-                    x = bitarray2float(read_bits[read_index:read_index+32])
-                    read_index += 32
-                    y = bitarray2float(read_bits[read_index:read_index+32])
-                    read_index += 32
-                    # t_list.append(t + t_list[-1])
-                    # point_list.append([x + point_list[-1][0], y + point_list[-1][1]])
-                    t_list.append(t + last_t)
-                    point_list.append([x + last_x, y + last_y])
+                    t = bitarray2signint(read_bits[read_index:read_index+time_bits], False)
+                    read_index += time_bits
+                    x = bitarray2signint(read_bits[read_index:read_index+traj_bits])
+                    read_index += traj_bits
+                    y = bitarray2signint(read_bits[read_index:read_index+traj_bits])
+                    read_index += traj_bits
+                    t_list.append(t * time_accuracy + t_list[-1])
+                    point_list.append([x * max_error_dim * 2 + point_list[-1][0], y * max_error_dim * 2 + point_list[-1][1]])
         
         t_list = np.array(t_list)
         point_list = np.array(point_list)
@@ -977,8 +1063,16 @@ class CISEDWCompressor(NoMapCompressor):
         if save_path is None:
             save_path = self.save_path
             
-        max_error = kwargs['max_error'] if 'max_error' in kwargs else 0.3
+        max_error = kwargs['max_error'] if 'max_error' in kwargs else 60
         polygon_num = kwargs['polygon_num'] if 'polygon_num' in kwargs else 16
+        
+        max_accuracy_error = kwargs['max_accuracy_error'] if 'max_accuracy_error' in kwargs else 10
+        max_error_dim = max_accuracy_error / math.sqrt(2)
+        
+        max_error = max_error - max_accuracy_error
+        
+        time_bits = kwargs['time_bits'] if 'time_bits' in kwargs else 32
+        traj_bits = kwargs['traj_bits'] if 'traj_bits' in kwargs else 16
         
         from shapely.geometry import Polygon, Point
         
@@ -1027,31 +1121,18 @@ class CISEDWCompressor(NoMapCompressor):
         
         if save:
             with open(save_path, 'wb') as f:
-                # write_bits = bitarray()
-                # for i in range(0, len(id_list)):
-                #     if i == 0 or \
-                #         point_list[i][0] - point_list[i - 1][0] > 1e5 or \
-                #         point_list[i][1] - point_list[i - 1][1] > 1e5 or \
-                #         self.t_list[id_list[i]] - self.t_list[id_list[i - 1]] > 1e5:
-                #         write_bits.extend(bitarray('0'))
-                #         write_bits.extend(double2bitarray(self.t_list[id_list[i]]))
-                #         write_bits.extend(double2bitarray(point_list[i][0]))
-                #         write_bits.extend(double2bitarray(point_list[i][1]))
-                #     else:
-                #         write_bits.extend(bitarray('1'))
-                #         write_bits.extend(float2bitarray(self.t_list[id_list[i]] - self.t_list[id_list[i - 1]]))
-                #         write_bits.extend(float2bitarray(point_list[i][0] - point_list[i - 1][0]))
-                #         write_bits.extend(float2bitarray(point_list[i][1] - point_list[i - 1][1]))
-                # self.compress_bits = len(write_bits)
-                # write_bits.tofile(f)
-                
-                
                 write_bits = bitarray()
+                
+                write_bits.extend(double2bitarray(self.time_accuracy))
+                write_bits.extend(float2bitarray(max_accuracy_error))
+                write_bits.extend(signint2bitarray(time_bits, 6))
+                write_bits.extend(signint2bitarray(traj_bits, 6))
+                
                 for i in range(0, len(id_list)):
                     if i == 0 or \
-                        point_list[i][0] - point_list[last_index][0] > 1e5 or \
-                        point_list[i][1] - point_list[last_index][1] > 1e5 or \
-                        self.t_list[id_list[i]] - self.t_list[id_list[last_index]] > 1e5:
+                        count_bits(round((point_list[i][0] - point_list[last_index][0]) / max_error_dim / 2) - round((point_list[i - 1][0] - point_list[last_index][0]) / max_error_dim / 2)) > traj_bits or \
+                        count_bits(round((point_list[i][1] - point_list[last_index][1]) / max_error_dim / 2) - round((point_list[i - 1][1] - point_list[last_index][1]) / max_error_dim / 2)) > traj_bits or \
+                        self.t_list[id_list[i]] - self.t_list[id_list[i - 1]] > (2 ** time_bits - 1) * self.time_accuracy:
                         write_bits.extend(bitarray('0'))
                         write_bits.extend(double2bitarray(self.t_list[id_list[i]]))
                         write_bits.extend(double2bitarray(point_list[i][0]))
@@ -1060,9 +1141,13 @@ class CISEDWCompressor(NoMapCompressor):
                         last_index = i
                     else:
                         write_bits.extend(bitarray('1'))
-                        write_bits.extend(float2bitarray(self.t_list[id_list[i]] - self.t_list[id_list[last_index]]))
-                        write_bits.extend(float2bitarray(point_list[i][0] - point_list[last_index][0]))
-                        write_bits.extend(float2bitarray(point_list[i][1] - point_list[last_index][1]))
+                        temp_t = round((self.t_list[id_list[i]] - self.t_list[id_list[i - 1]]) / self.time_accuracy)
+                        temp_x = round((point_list[i][0] - point_list[last_index][0]) / max_error_dim / 2) - round((point_list[i - 1][0] - point_list[last_index][0]) / max_error_dim / 2)
+                        temp_y = round((point_list[i][1] - point_list[last_index][1]) / max_error_dim / 2) - round((point_list[i - 1][1] - point_list[last_index][1]) / max_error_dim / 2)
+                        
+                        write_bits.extend(signint2bitarray(temp_t, time_bits))
+                        write_bits.extend(signint2bitarray(temp_x, traj_bits))
+                        write_bits.extend(signint2bitarray(temp_y, traj_bits))
                 self.compress_bits = len(write_bits)
                 write_bits.tofile(f)
         
@@ -1079,6 +1164,17 @@ class CISEDWCompressor(NoMapCompressor):
             
             t_list = []
             point_list = []
+            time_accuracy = bitarray2double(read_bits[read_index:read_index+64])
+            read_index += 64
+            max_accuracy_error = bitarray2float(read_bits[read_index:read_index+32])
+            read_index += 32
+            max_error_dim = max_accuracy_error / math.sqrt(2)
+            
+            time_bits = bitarray2signint(read_bits[read_index:read_index+6], False)
+            read_index += 6
+            traj_bits = bitarray2signint(read_bits[read_index:read_index+6], False)
+            read_index += 6
+            
             while read_index < len(read_bits) - 8:
                 type = bitarray2signint(read_bits[read_index:read_index+1], False)
                 read_index += 1
@@ -1091,20 +1187,15 @@ class CISEDWCompressor(NoMapCompressor):
                     read_index += 64
                     t_list.append(t)
                     point_list.append([x, y])
-                    last_t = t
-                    last_x = x
-                    last_y = y
                 else:
-                    t = bitarray2float(read_bits[read_index:read_index+32])
-                    read_index += 32
-                    x = bitarray2float(read_bits[read_index:read_index+32])
-                    read_index += 32
-                    y = bitarray2float(read_bits[read_index:read_index+32])
-                    read_index += 32
-                    # t_list.append(t + t_list[-1])
-                    # point_list.append([x + point_list[-1][0], y + point_list[-1][1]])
-                    t_list.append(t + last_t)
-                    point_list.append([x + last_x, y + last_y])
+                    t = bitarray2signint(read_bits[read_index:read_index+time_bits], False)
+                    read_index += time_bits
+                    x = bitarray2signint(read_bits[read_index:read_index+traj_bits])
+                    read_index += traj_bits
+                    y = bitarray2signint(read_bits[read_index:read_index+traj_bits])
+                    read_index += traj_bits
+                    t_list.append(t * time_accuracy + t_list[-1])
+                    point_list.append([x * max_error_dim * 2 + point_list[-1][0], y * max_error_dim * 2 + point_list[-1][1]])
         
         t_list = np.array(t_list)
         point_list = np.array(point_list)
@@ -1263,11 +1354,12 @@ def process_file(file_path,
                  time_unit,
                  drop,
                  dct_no_map_block_size,
-                 dct_no_map_compression_ratio,
                  dct_no_map_scale,
                  dct_no_map_scale_length,
-                 dct_dynamic_ratio_flag,
-                 cised_max_error):
+                 cised_max_error,
+                 cised_max_accuracy_error,
+                 cised_time_bits,
+                 cised_traj_bits):
     logs = f'{file_path}\n'
     
     result = []
@@ -1281,31 +1373,30 @@ def process_file(file_path,
     # logs += f"squish performance: {squish_result}\n"
     # result.append([squish_compressor.name, squish_result])
     
-    # dct_no_map_compressor = DCTNoMapCompressor(file_path, data_source, time_unit, drop)
-    # # dct_no_map_compressor.compress(block_size=dct_no_map_block_size, compression_ratio=dct_no_map_compression_ratio, scale=dct_no_map_scale, dynamic_ratio_flag=dct_dynamic_ratio_flag, scale_length=dct_no_map_scale_length, max_error=cised_max_error)
-    # dct_no_map_compressor.compress(block_size=dct_no_map_block_size, compression_ratio=dct_no_map_compression_ratio, scale=dct_no_map_scale, dynamic_ratio_flag=dct_dynamic_ratio_flag, scale_length=dct_no_map_scale_length,)
-    # dct_no_map_compressor.decompress()
+    dct_no_map_compressor = DCTNoMapCompressor(file_path, data_source, time_unit, drop)
+    dct_no_map_compressor.compress(block_size=dct_no_map_block_size, scale=dct_no_map_scale, scale_length=dct_no_map_scale_length, max_error=cised_max_error)
+    dct_no_map_compressor.decompress()
     
-    # dct_no_map_result = dct_no_map_compressor.evaluation_metrics(cised_max_error)
-    # # dct_no_map_compressor.plot_traj()
-    # logs += f"dct no map performance: {dct_no_map_result}\n"
-    # result.append([dct_no_map_compressor.name, dct_no_map_result])
+    dct_no_map_result = dct_no_map_compressor.evaluation_metrics(cised_max_error)
+    dct_no_map_compressor.plot_traj(1094)
+    logs += f"dct no map performance: {dct_no_map_result}\n"
+    result.append([dct_no_map_compressor.name, dct_no_map_result])
     
     ciseds_compressor = CISEDSCompressor(file_path, data_source, time_unit, drop)
-    ciseds_compressor.compress(max_error=cised_max_error)
+    ciseds_compressor.compress(max_error=cised_max_error, max_accuracy_error=cised_max_accuracy_error, time_bits=cised_time_bits, traj_bits=cised_traj_bits)
     ciseds_compressor.decompress()
     
     ciseds_result = ciseds_compressor.evaluation_metrics(cised_max_error)
-    # ciseds_compressor.plot_traj(dct_no_map_compressor.argmax_error)
+    ciseds_compressor.plot_traj(1094)
     logs += f"cised s performance: {ciseds_result}\n"
     result.append([ciseds_compressor.name, ciseds_result])
     
     cisedw_compressor = CISEDWCompressor(file_path, data_source, time_unit, drop)
-    cisedw_compressor.compress(max_error=cised_max_error)
+    cisedw_compressor.compress(max_error=cised_max_error, max_accuracy_error=cised_max_accuracy_error, time_bits=cised_time_bits, traj_bits=cised_traj_bits)
     cisedw_compressor.decompress()
     
     cisedw_result = cisedw_compressor.evaluation_metrics(cised_max_error)
-    # cisedw_compressor.plot_traj(dct_no_map_compressor.argmax_error)
+    cisedw_compressor.plot_traj(1094)
     logs += f"cised w performance: {cisedw_result}\n"
     result.append([cisedw_compressor.name, cisedw_result])
     
@@ -1314,10 +1405,12 @@ def process_file(file_path,
     return result, logs
 
 def main():
-    data_source = 'mopsi'
+    data_source = 'nuplan'
     
     if data_source == 'geolife':
         path = '/home/wkf/data/PRESS/datasets/geolife'
+    if data_source == 'geolife_debug':
+        path = '/home/wkf/data/PRESS/datasets/geolife_debug'
     if data_source == 'geolife_3d':
         path = '/home/wkf/data/PRESS/datasets/geolife_3d'
     if data_source == 'nuplan':
@@ -1335,15 +1428,20 @@ def main():
     
     time_unit = config['time_unit']
     dct_no_map_block_size = config[f'drop_{drop}']['dct_no_map']['block_size']
-    dct_no_map_compression_ratio = config[f'drop_{drop}']['dct_no_map']['compression_ratio']
     dct_no_map_scale = config[f'drop_{drop}']['dct_no_map']['scale']
     dct_no_map_scale_length = config[f'drop_{drop}']['dct_no_map']['scale_length']
-    dct_dynamic_ratio_flag = config[f'drop_{drop}']['dct_no_map']['dynamic_ratio_flag']
     cised_max_error = config[f'drop_{drop}']['cised']['max_error']
+    cised_max_accuracy_error = config[f'drop_{drop}']['cised']['max_accuracy_error']
+    cised_time_bits = config[f'drop_{drop}']['cised']['time_bits']
+    cised_traj_bits = config[f'drop_{drop}']['cised']['traj_bits']
     
     tot_path = []
     
     if data_source == 'geolife':
+        for file_name in os.listdir(path):
+            ff = os.path.join(path, file_name)
+            tot_path.append(ff)
+    if data_source == 'geolife_debug':
         for file_name in os.listdir(path):
             ff = os.path.join(path, file_name)
             tot_path.append(ff)
@@ -1364,7 +1462,7 @@ def main():
     if data_source == 'shangqi':
         tot_path.append(path)
     
-    multiprocessing_flag = True
+    multiprocessing_flag = False
     
     global_counter = Global_Counter()
     results = []
@@ -1379,11 +1477,12 @@ def main():
                                 time_unit,
                                 drop,
                                 dct_no_map_block_size,
-                                dct_no_map_compression_ratio,
                                 dct_no_map_scale,
                                 dct_no_map_scale_length,
-                                dct_dynamic_ratio_flag,
-                                cised_max_error))
+                                cised_max_error,
+                                cised_max_accuracy_error,
+                                cised_time_bits,
+                                cised_traj_bits))
                 pool_results.append(result)
             
             for result in pool_results:
@@ -1392,7 +1491,7 @@ def main():
                 logs += log
     else:
         for ff in tot_path:
-            if ff not in ['/home/wkf/data/PRESS/datasets/geolife/traj_065.txt',
+            if ff not in ['/nas/common/data/trajectory/nuplan/nuplan_csv/test/2021.05.25.12.30.39_veh-25_01912_02176',
                           ]:
                 continue
             
@@ -1401,10 +1500,12 @@ def main():
                                 time_unit,
                                 drop,
                                 dct_no_map_block_size,
-                                dct_no_map_compression_ratio,
                                 dct_no_map_scale,
-                                dct_dynamic_ratio_flag,
-                                cised_max_error)
+                                dct_no_map_scale_length,
+                                cised_max_error,
+                                cised_max_accuracy_error,
+                                cised_time_bits,
+                                cised_traj_bits)
             results.extend(result)
             logs += log
         

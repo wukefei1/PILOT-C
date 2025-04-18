@@ -81,6 +81,16 @@ def bitarray2float(bit_array):
     n = struct.unpack('f', packed_float)
     return n[0]
 
+def count_bits(value: int):
+    import math
+    needbits = 0
+    if value > 0:
+        needbits = 1 + math.ceil(math.log2(value + 1))
+    if value < 0:
+        needbits = 1 + math.ceil(math.log2(-value))
+    return needbits
+    
+
 class Global_Counter:
     def __init__(self):
         self.counter = {}

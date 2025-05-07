@@ -81,6 +81,56 @@ def bitarray2float(bit_array):
     n = struct.unpack('f', packed_float)
     return n[0]
 
+def utfint2bitarray(value, data_length = 4, signed = False):
+    prefix = bitarray()
+    if signed:
+        prefix = bitarray('1') if value < 0 else bitarray('0')
+        value = abs(value)
+    blocks = []
+    while True:
+        data = value & ((1 << data_length) - 1)
+        value >>= data_length
+        has_more = value > 0
+        flag = 1 if has_more else 0
+        blocks.append((flag, data))
+        if not has_more:
+            break
+    
+    bit_str = ''.join(
+        str(flag) + bin(data)[2:].zfill(data_length)
+        for flag, data in blocks
+    )
+    
+    return prefix +bitarray(bit_str)
+
+def bitarray2utfint(bit_array, read_index, data_length = 4, signed = False):
+    sign = 1
+    if signed:
+        sign_bit = bit_array[read_index]
+        read_index += 1
+        sign = -1 if sign_bit else 1
+    
+    flag = 1
+    blocks = []
+    while read_index < len(bit_array) and flag == 1:
+        chunk = bit_array[read_index:read_index+data_length+1]
+        flag = chunk[0]
+        data_bits = chunk[1:]
+        data_bits = ''.join(str(bit) for bit in data_bits)
+        data = int(data_bits, 2)
+        blocks.append((flag, data))
+        read_index += data_length + 1
+    
+    data_blocks = []
+    for flag, data in blocks:
+        data_blocks.append(data)
+    
+    result = 0
+    for i, data in enumerate(data_blocks):
+        result |= data << (data_length * i)
+    
+    return result * sign, read_index
+
 def count_bits(value: int):
     import math
     needbits = 0

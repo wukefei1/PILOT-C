@@ -3,11 +3,8 @@ time_unit: 1
 drop_0:
   dct_no_map:
     block_size: 500
-    scale: 0.5
-    scale_length: 0.06
+    scale_length: 0.03
 
   cised:
-    max_error: 0.6
-    max_accuracy_error: 1
-    time_bits: 16
-    traj_bits: 16
+    max_error: 200
+    max_accuracy_error: 10

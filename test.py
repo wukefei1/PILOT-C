@@ -112,40 +112,25 @@ def trajectory_compression(csv_path, output_path):
         
 # # trajectory_compression("ego.csv", ".")
 import numpy as np
-from scipy.fft import dct, dctn, idctn
+from scipy.fft import dct, idct
 
 # 输入信号
 # x = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 10, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
 # x = np.array([5, 5, 5, 5, 5, 5, 5, 5, 5, 10, 10, 10, 10, 10, 10, 5, 5, 5, 5, 5, 5, 5, 5, 5])
-x = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 10, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1])
+# x = np.array([2, 2, 2, 2, -2, -2, -2, -2])
+# N = len(x)
+# X_default = dct(x)
 
-x = x - np.mean(x)
-N = len(x)
+# print(X_default)
+# X_default = np.round(X_default / 2) * 2
+# print(idct(X_default))
 
-# 默认情况（无归一化）
-X_default = dct(x, norm=None)
-# print("Default DCT (no normalization):\n", X_default)
+# x = np.array([1, 1, 1, 1, -1, -1, -1, -1])
+# X_default = dct(x)
 
-# 正交归一化
-X_ortho = dct(x, norm='ortho')
-# print("\nOrthonormalized DCT:\n", X_ortho)
+# print(X_default)
+# X_default = np.round(X_default)
+# print(idct(X_default))
 
-# 手动计算正交归一化结果
-manual_ortho = np.zeros_like(X_ortho)
-manual_ortho[0] = np.sqrt(1/N) * np.sum(x)
-for k in range(1, N):
-    manual_ortho[k] = np.sqrt(2/N) * np.sum(x * np.cos(np.pi * k * (2*np.arange(N) + 1) / (2*N)))
-# print("\nManual Orthonormalized DCT:\n", manual_ortho)
-
-print(dctn(x))
-
-idct_x = idctn(np.pad(dctn(x)[:12], (0, 24 - 12), 'constant'))
-
-sum_x = np.cumsum(x)
-sum_idct_x = np.cumsum(idct_x)
-print(np.sum(manual_ortho ** 2 * 2 * N))
-print(np.sum(X_ortho ** 2 * 2 * N))
-print(np.sum(X_default ** 2))
-
-
-print(bitarray2float(float2bitarray(0.6)))
+print(utfint2bitarray(10, 4, False))
+print(utfint2bitarray(-100, 4, True))

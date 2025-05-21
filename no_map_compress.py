@@ -379,6 +379,7 @@ class NoMapCompressor():
 class DCTNoMapCompressor(NoMapCompressor):
     def __init__(self, path, data_source='nuplan', time_unit=0.1, drop=0):
         super().__init__('dct_no_map', path, data_source, time_unit, drop)
+        self.scale_factor = 12
         
         pass
     
@@ -388,7 +389,6 @@ class DCTNoMapCompressor(NoMapCompressor):
             save_path = self.save_path
         
         block_size = kwargs['block_size'] if 'block_size' in kwargs else 300
-        self.scale_factor = 0.5
         scale_length = kwargs['scale_length'] if 'scale_length' in kwargs else 1
         max_error = kwargs['max_error'] if 'max_error' in kwargs else None
         max_error = bitarray2float(float2bitarray(max_error))
@@ -412,8 +412,8 @@ class DCTNoMapCompressor(NoMapCompressor):
         while start_index < len(self.t_list):
             end_index = start_index
             while end_index < len(self.t_list) - 1 and \
-                  np.sqrt(np.sum((self.traj[end_index + 1] - self.traj[end_index]) ** 2) / (self.t_list[end_index + 1] - self.t_list[end_index])) < 200 and \
-                  self.t_list[end_index + 1] - self.t_list[start_index] < 500 * self.time_unit:
+                  self.t_list[end_index + 1] - self.t_list[end_index] < 120 * self.time_unit and \
+                  np.sqrt(np.sum((self.traj[end_index + 1] - self.traj[end_index]) ** 2) / (self.t_list[end_index + 1] - self.t_list[end_index])) < 200:
                 end_index = end_index + 1
             
             if end_index - start_index <= 1:
@@ -431,13 +431,11 @@ class DCTNoMapCompressor(NoMapCompressor):
                 temp_traj = []
                 start_t = self.t_list[start_index]
                 
-                delta_t = (self.t_list[end_index] - self.t_list[start_index]) / (end_index - start_index)
-                
                 for i in range(start_index, end_index):
-                    min_t = int(np.ceil((self.t_list[i] - start_t) / delta_t))
-                    max_t = int(np.ceil((self.t_list[i + 1] - start_t) / delta_t)) + (1 if i == end_index - 1 else 0)
+                    min_t = int(np.ceil((self.t_list[i] - start_t) / self.time_unit))
+                    max_t = int(np.ceil((self.t_list[i + 1] - start_t) / self.time_unit)) + (1 if i == end_index - 1 else 0)
                     for j in range(min_t, max_t):
-                        temp_t = start_t + j * delta_t
+                        temp_t = start_t + j * self.time_unit
                         temp = (temp_t - self.t_list[i]) / (self.t_list[i + 1] - self.t_list[i]) * (self.traj[i + 1] - self.traj[i]) + self.traj[i]
                         temp_traj.append(temp)
                 
@@ -469,34 +467,29 @@ class DCTNoMapCompressor(NoMapCompressor):
                     mean = np.mean(block_dim)
                     block_dim = block_dim - mean
                     
-                    temp_scale = scale * math.sqrt(len(block_dim))
-                    
                     dctn_dim = dctn(block_dim, norm='ortho')
                     compressed_dim = []
                     index = int((len(dctn_dim) - 1) * scale_length)
-                    while int(np.round(dctn_dim[index] * temp_scale)) == 0 and index > 0:
+                    while int(np.round(dctn_dim[index] * scale)) == 0 and index > 0:
                         index = index - 1
                     
                     for j in range(1, index + 1):
-                        compressed_dim.append(int(np.round(dctn_dim[j] * temp_scale)))
+                        compressed_dim.append(int(np.round(dctn_dim[j] * scale)))
                     
                     lossless_compressed_dim, bit_cnt = lossless_compress(compressed_dim, length_bit, 4)
                     result[dim].append([lossless_compressed_dim, temp_traj[min((block_id + 1) * temp_block_size, len(temp_traj) - 1), dim]])
                     
-            result_list.append([self.t_list[start_index], self.t_list[end_index], temp_traj[0], temp_block_size, len(delta), result])
+            result_list.append([self.t_list[start_index], temp_traj[0], temp_block_size, len(delta), result])
         
         if max_error is not None:
             decompress_traj0 = []
             t_list0 = []
             for i in range(len(result_list)):
                 start_t = result_list[i][0]
-                end_t = result_list[i][1]
-                start_point = result_list[i][2]
-                temp_block_size = result_list[i][3]
-                delta_num = result_list[i][4]
-                result = result_list[i][5]
-                
-                temp_scale = scale * math.sqrt(delta_num)
+                start_point = result_list[i][1]
+                temp_block_size = result_list[i][2]
+                delta_num = result_list[i][3]
+                result = result_list[i][4]
                 
                 tot_idct = [[] for _ in range(traj_dim)]
                 for dim in range(traj_dim):
@@ -506,7 +499,7 @@ class DCTNoMapCompressor(NoMapCompressor):
                             compressed_dim.extend(data)
                         mean = (result[dim][i][1] - (result[dim][i - 1][1] if i > 0 else start_point[dim])) / min(temp_block_size, delta_num - temp_block_size * i)
                         compressed_dim = np.pad(compressed_dim, (1, min(temp_block_size, delta_num - temp_block_size * i) - len(compressed_dim) - 1), 'constant')
-                        idct_dim = idctn(compressed_dim / temp_scale, norm='ortho')
+                        idct_dim = idctn(compressed_dim / scale, norm='ortho')
                         idct_dim = idct_dim + mean
                         tot_idct[dim].extend(idct_dim)
                 tot_idct = np.array(tot_idct).T
@@ -520,7 +513,7 @@ class DCTNoMapCompressor(NoMapCompressor):
                 t_list0.append(start_t)
                 for i in range(len(tot_idct)):
                     decompress_traj0.append(decompress_traj0[-1] + tot_idct[i])
-                    t_list0.append(t_list0[-1] + (end_t - start_t) / delta_num)
+                    t_list0.append(t_list0[-1] + self.time_unit)
             
             decompress_traj1 = []
             t_list1 = []
@@ -569,7 +562,7 @@ class DCTNoMapCompressor(NoMapCompressor):
                 error_point.append(self.t_list[i])
                 error_points.append(error_point)
                 
-        print(len(result_list))
+        
         if save:
             with open(save_path, 'wb') as f:
                 write_bits = bitarray()
@@ -577,6 +570,7 @@ class DCTNoMapCompressor(NoMapCompressor):
                 write_bits.extend(double2bitarray(self.time_accuracy))
                 write_bits.extend(float2bitarray(max_error))
                 if len(result_list) != 0:
+                    write_bits.extend(float2bitarray(self.time_unit))
                     write_bits.extend(float2bitarray(scale_length))
                     write_bits.extend(utfint2bitarray(block_size, utf, signed=False))
                     
@@ -584,21 +578,19 @@ class DCTNoMapCompressor(NoMapCompressor):
                 
                 for i in range(len(result_list)):
                     start_t = result_list[i][0]
-                    end_t = result_list[i][1]
-                    start_point = result_list[i][2]
-                    temp_block_size = result_list[i][3]
-                    delta_num = result_list[i][4]
-                    result = result_list[i][5]
+                    start_point = result_list[i][1]
+                    temp_block_size = result_list[i][2]
+                    delta_num = result_list[i][3]
+                    result = result_list[i][4]
                     
                     length_bit = max(0, math.ceil(math.log2(temp_block_size * scale_length)))
                     if i == 0:
                         write_bits.extend(utfint2bitarray(round(start_t / self.time_accuracy), utf, signed=False))
                     else:
-                        write_bits.extend(utfint2bitarray(round((start_t - result_list[i - 1][1]) / self.time_accuracy), utf, signed=False))
-                    write_bits.extend(utfint2bitarray(round((end_t - start_t) / self.time_accuracy), utf, signed=False))
+                        write_bits.extend(utfint2bitarray(round((start_t - result_list[i - 1][0]) / self.time_accuracy), utf, signed=False))
                     write_bits.extend(utfint2bitarray(delta_num, utf, signed=False))
                     
-
+                    
                     for dim in range(traj_dim):
                         write_bits.extend(utfint2bitarray(round(start_point[dim] / max_accuracy_error_dim / 2) - \
                                                           round(last_value[dim] / max_accuracy_error_dim / 2), utf, signed=True))
@@ -608,10 +600,8 @@ class DCTNoMapCompressor(NoMapCompressor):
                             write_bits.extend(utfint2bitarray(round(result[dim][i][1] / max_accuracy_error_dim / 2) - \
                                                               round(last_value[dim] / max_accuracy_error_dim / 2), utf, signed=True))
                             last_value[dim] = result[dim][i][1]
-                    
                     for dim in range(traj_dim):
                         for i in range(len(result[dim])):
-                            # write_bits.extend(signint2bitarray(0, length_bit))
                             write_bits.extend(signint2bitarray(len(result[dim][i][0]), length_bit))
                             for j in range(len(result[dim][i][0])):
                                 write_bits.extend(utfint2bitarray(result[dim][i][0][j][0], utf, signed=False))
@@ -673,6 +663,8 @@ class DCTNoMapCompressor(NoMapCompressor):
             max_accuracy_error_dim = max_accuracy_error / math.sqrt(traj_dim)
             
             if num != 0:
+                time_unit = bitarray2float(read_bits[read_index:read_index+32])
+                read_index += 32
                 scale = self.scale_factor / max_error
                 scale_length = bitarray2float(read_bits[read_index:read_index+32])
                 read_index += 32
@@ -685,9 +677,7 @@ class DCTNoMapCompressor(NoMapCompressor):
                     start_t = time_num
                 else:
                     time_num, read_index = bitarray2utfint(read_bits, read_index, utf, signed=False)
-                    start_t = result_list[-1][1] + time_num
-                time_num, read_index = bitarray2utfint(read_bits, read_index, utf, signed=False)
-                end_t = start_t + time_num
+                    start_t = result_list[-1][0] + time_num
                     
                 delta_num, read_index = bitarray2utfint(read_bits, read_index, utf, signed=False)
                 
@@ -724,11 +714,10 @@ class DCTNoMapCompressor(NoMapCompressor):
                         result_dim.append([compressed_dim, point_list[block_id + 1][dim]])
                     result.append(result_dim)
                 
-                result_list.append([start_t, end_t, point_list[0], temp_block_size, delta_num, result])
+                result_list.append([start_t, point_list[0], temp_block_size, delta_num, result])
                 
             for i in range(len(result_list)):
                 result_list[i][0] *= time_accuracy
-                result_list[i][1] *= time_accuracy
             
             error_points_num, read_index = bitarray2utfint(read_bits, read_index, utf, signed=False)
             for i in range(error_points_num):
@@ -772,13 +761,10 @@ class DCTNoMapCompressor(NoMapCompressor):
         t_list0 = []
         for i in range(len(result_list)):
             start_t = result_list[i][0]
-            end_t = result_list[i][1]
-            start_point = result_list[i][2]
-            temp_block_size = result_list[i][3]
-            delta_num = result_list[i][4]
-            result = result_list[i][5]
-            
-            temp_scale = scale * math.sqrt(temp_block_size)
+            start_point = result_list[i][1]
+            temp_block_size = result_list[i][2]
+            delta_num = result_list[i][3]
+            result = result_list[i][4]
             
             tot_idct = [[] for _ in range(traj_dim)]
             for dim in range(traj_dim):
@@ -786,7 +772,7 @@ class DCTNoMapCompressor(NoMapCompressor):
                     compressed_dim = result[dim][i][0]
                     mean = (result[dim][i][1] - (result[dim][i - 1][1] if i > 0 else start_point[dim])) / min(temp_block_size, delta_num - temp_block_size * i)
                     compressed_dim = np.pad(compressed_dim, (1, min(temp_block_size, delta_num - temp_block_size * i) - len(compressed_dim) - 1), 'constant')
-                    idct_dim = idctn(compressed_dim / temp_scale, norm='ortho')
+                    idct_dim = idctn(compressed_dim / scale, norm='ortho')
                     idct_dim = idct_dim + mean
                     tot_idct[dim].extend(idct_dim)
             tot_idct = np.array(tot_idct).T
@@ -800,7 +786,7 @@ class DCTNoMapCompressor(NoMapCompressor):
             t_list0.append(start_t)
             for i in range(len(tot_idct)):
                 decompress_traj0.append(decompress_traj0[-1] + tot_idct[i])
-                t_list0.append(t_list0[-1] + (end_t - start_t) / delta_num)
+                t_list0.append(t_list0[-1] + time_unit)
         
         decompress_traj1 = []
         t_list1 = []

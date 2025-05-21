@@ -3,8 +3,7 @@ time_unit: 1
 drop_0:
   dct_no_map:
     block_size: 500
-    scale_length: 0.03
+    scale_length: 0.031
 
   cised:
-    max_error: 200
-    max_accuracy_error: 10
+    max_error: 50

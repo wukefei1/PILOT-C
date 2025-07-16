@@ -45,6 +45,40 @@ def bitarray2signint(bit_array, signed=True):
         value = -(~value & ((1 << bit_length) - 1)) - 1
     return value
 
+def customint2bitarray(x):
+    if x == 0:
+        return bitarray('0')
+    if x == 1:
+        return bitarray('100')
+    if x == -1:
+        return bitarray('101')
+    
+    sign = '0' if x > 0 else '1'
+    abs_x = abs(x)
+    k = abs_x.bit_length()  # 确定层级
+    prefix = '1' * k + '0'
+    value_part = abs_x - (1 << (k - 1))
+    value_bits = bin(value_part)[2:].zfill(k - 1)
+    return bitarray(prefix + sign + value_bits)
+
+def bitarry2customint(bit_array, read_index):
+    if bit_array[read_index] == 0:
+        return 0, read_index + 1
+    k = 0
+    while bit_array[read_index] == 1:
+        k += 1
+        read_index += 1
+    read_index += 1
+    sign = bit_array[read_index]
+    read_index += 1
+    value_bits = ''.join(str(bit) for bit in bit_array[read_index:read_index+k - 1])
+    read_index += k - 1
+    
+    value = (1 << (k - 1)) + (int(value_bits, 2) if value_bits != '' else 0)
+    if sign == 1:
+        value = -value
+    return value, read_index
+
 def double2bitarray(n):
     packed_double = struct.pack('d', n)
     bit_array = bitarray()
@@ -81,11 +115,7 @@ def bitarray2float(bit_array):
     n = struct.unpack('f', packed_float)
     return n[0]
 
-def utfint2bitarray(value, data_length = 4, signed = False):
-    prefix = bitarray()
-    if signed:
-        prefix = bitarray('1') if value < 0 else bitarray('0')
-        value = abs(value)
+def varint2bitarray(value, data_length = 4):
     blocks = []
     while True:
         data = value & ((1 << data_length) - 1)
@@ -101,19 +131,13 @@ def utfint2bitarray(value, data_length = 4, signed = False):
         for flag, data in blocks
     )
     
-    return prefix +bitarray(bit_str)
+    return bitarray(bit_str)
 
-def bitarray2utfint(bit_array, read_index, data_length = 4, signed = False):
-    sign = 1
-    if signed:
-        sign_bit = bit_array[read_index]
-        read_index += 1
-        sign = -1 if sign_bit else 1
-    
+def bitarray2varint(bit_array, read_index, data_length = 4):
     flag = 1
     blocks = []
     while read_index < len(bit_array) and flag == 1:
-        chunk = bit_array[read_index:read_index+data_length+1]
+        chunk = bit_array[read_index:read_index + data_length + 1]
         flag = chunk[0]
         data_bits = chunk[1:]
         data_bits = ''.join(str(bit) for bit in data_bits)
@@ -129,7 +153,21 @@ def bitarray2utfint(bit_array, read_index, data_length = 4, signed = False):
     for i, data in enumerate(data_blocks):
         result |= data << (data_length * i)
     
-    return result * sign, read_index
+    return result, read_index
+
+def zigzag2bitarray(value, data_length = 4):
+    if value < 0:
+        value = -2 * value - 1
+    else:
+        value = 2 * value
+    return varint2bitarray(value, data_length)
+
+def bitarray2zigzag(bit_array, read_index, data_length = 4):
+    value, read_index = bitarray2varint(bit_array, read_index, data_length)
+    if value & 1 == 0:
+        return value >> 1, read_index
+    else:
+        return -((value + 1) >> 1), read_index
 
 def count_bits(value: int):
     import math
@@ -161,5 +199,7 @@ class Global_Counter:
         self.counter[key]['total_error_cnt'] += data['error_cnt']
         
     def get_result(self):
+        result = ''
         for key in self.counter:
-            print(f'{key}: {self.counter[key]}')
+            result += (f'{key}: {self.counter[key]}\n')
+        return result

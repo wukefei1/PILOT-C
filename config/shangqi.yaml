@@ -1,9 +1,0 @@
-time_unit: 0.02
-
-drop_0:
-  dct_no_map:
-    block_size: 1000
-    scale_length: 0.08
-
-  cised:
-    max_error: 0.3

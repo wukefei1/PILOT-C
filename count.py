@@ -1,5 +1,6 @@
-from no_map_compress import *
-
+# from no_map_compress import *
+import numpy as np
+import os
 import multiprocessing
 
 
@@ -16,7 +17,7 @@ def count_file(path):
         t_list.append(t)
         traj.append([x, y])
         
-    
+    t_list = np.array(t_list)
     traj = np.array(traj)
     
     # data = [x.strip().split(",") for x in open(os.path.join(path, 'ego.csv')).readlines()]
@@ -57,6 +58,8 @@ def count_file(path):
     
     test_cnt = 0
     
+    delta_t_list = np.array([])
+    
     while start_index < len(t_list):
         end_index = start_index
         while end_index < len(t_list) - 1 and \
@@ -84,16 +87,19 @@ def count_file(path):
         tot_time += temp_time
         tot_cnt += end_index - start_index
         
+        delta_t_list = np.append(delta_t_list, temp_t_list[1:] - temp_t_list[:-1])
+        
         
         start_index = end_index + 1
-        
-    return tot_dist, tot_time, tot_cnt, len(other_points), test_cnt
+    
+    print(path, tot_time / tot_cnt)
+    return tot_dist, t_list[-1] - t_list[0], tot_cnt, len(other_points), test_cnt, t_list[1:] - t_list[:-1]
 
 def count_files():
     tot_path = []
-    path = '/home/wkf/data/PRESS/datasets/geolife' # 9.157710830943056 2.9696855649856775
-    # path = '/home/wkf/data/PRESS/datasets/mopsi' # 5.477687821243067 2.115325000366175
-    # path = '/nas/common/data/trajectory/nuplan/nuplan_csv/test' # 4.375608316533668 0.09999930041108658
+    # path = '/home/wkf/data/PRESS/datasets/geolife' # 9.157710830943056 2.9696855649856775 18.95318746755711
+    path = '/home/wkf/data/PRESS/datasets/mopsi' # 5.477687821243067 2.115325000366175 5.182156050080735
+    # path = '/nas/common/data/trajectory/nuplan/nuplan_csv/test' # 4.375608316533668 0.09999930041108658 1.2514007239080477e-08
 
     for file_name in os.listdir(path):
         ff = os.path.join(path, file_name)
@@ -112,6 +118,8 @@ def count_files():
         test_len = 0
         test_cnt = 0
         
+        delta_t_list = np.array([])
+        
         for result in pool_results:
             res = result.get()
             dist += res[0]
@@ -119,7 +127,9 @@ def count_files():
             cnt += res[2]
             test_len += res[3]
             test_cnt += res[4]
+            delta_t_list = np.append(delta_t_list, res[5])
         print(dist, time, cnt, dist / time, time / cnt)
-        print(test_len, test_cnt, test_len / test_cnt)
+        # print(test_len, test_cnt, test_len / test_cnt)
+        print(np.var(delta_t_list))
         
 count_files()

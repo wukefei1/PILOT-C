@@ -269,14 +269,29 @@ for i in range(-10, 10):
 import matplotlib.pyplot as plt
  
 # 示例数据
-x = [1, 2, 3, 4, 5]
-y1 = [1, 2, 3, 4, 5]
-y2 = [5, 4, 3, 2, 1]
- 
-plt.plot(x, y1, label='Line 1')
-plt.plot(x, y2, label='Line 2')
- 
-# 将图例放置在图的底部，并设置为横向排列
-plt.legend(loc='upper center', ncol=10, bbox_to_anchor=(0.5, 1.2))  # 使用bbox_to_anchor调整位置
+x = range(1, 6)
+y1 = [20, 35, 30, 35, 27]
+y2 = [1, 2, 0.7, 2.5, 3]
+fig, ax1 = plt.subplots()
 
+ax1.plot(x, y2, 'r', label='plot')
+ax1.set_ylabel('plot data')
+ax1.tick_params(axis='y')
+ax1.set_xlabel('x')
+
+ax2 = ax1.twinx()
+ax2.bar(x, y1, color='b', alpha=0.6, label='bar')
+ax2.set_ylabel('bar data')
+ax2.tick_params(axis='y')
+ 
+# 添加图例
+lines, labels = ax1.get_legend_handles_labels()
+lines2, labels2 = ax2.get_legend_handles_labels()
+lines.extend(lines2)
+labels.extend(labels2)
+fig.legend(lines, labels, loc = 'upper center', ncol=4, bbox_to_anchor=(0.5, 1))
+ 
+# 设置标题和标签
+plt.title('test')
+ 
 plt.savefig('test.pdf')

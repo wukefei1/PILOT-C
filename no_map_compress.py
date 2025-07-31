@@ -294,7 +294,9 @@ class Compressor():
                 'mean_error': float(mean_error),
                 'compress_ratio': float((len(self.traj) * (len(self.traj[0]) + 1) * 8) / self.compress_bits * 8),
                 'length': len(self.traj),
-                'error_cnt': len(error_cnt)}
+                'error_cnt': len(error_cnt),
+                'var_error': float(np.var(error)),
+                }
         
     def plot_traj(self, argmax_error=None):
         self.decompress_traj = np.array(self.decompress_traj)
@@ -374,7 +376,7 @@ class PILOTCCompressor(Compressor):
         max_error = kwargs['max_error'] if kwargs['max_error'] != None else self.error_default
         accuracy = kwargs['accuracy'] if kwargs['accuracy'] != None else self.accuracy_default
         utf = kwargs['utf'] if kwargs['utf'] != None else self.utf_default
-        save_path = self.save_path + f'_utf_{utf}_accuracy_{accuracy}_error_{max_error}_block_{kwargs['block_size']}_scale_{kwargs['scale_length']}'
+        save_path = self.save_path + f'_utf_{utf}_accuracy_{accuracy}_error_{max_error}_block_{kwargs['block_size']}_scale_{kwargs['scale_length']}_epsilon_{kwargs['epsilon']}'
         
         max_error = bitarray2float(float2bitarray(max_error))
         block_size = int(max_error * self.a + self.b) if kwargs['block_size'] == None else kwargs['block_size']
@@ -383,7 +385,7 @@ class PILOTCCompressor(Compressor):
         
         self.scale_length = scale_length
         
-        scale = self.scale_factor / max_error
+        scale = self.scale_factor / max_error if kwargs['epsilon'] == None else 0.5 / kwargs['epsilon'] / max_error
         max_error_dim = max_error / math.sqrt(traj_dim)
         max_accuracy_error_dim = max_accuracy_error / math.sqrt(traj_dim)
         
@@ -395,8 +397,14 @@ class PILOTCCompressor(Compressor):
         end_index = 0
         while start_index < len(self.t_list):
             end_index = start_index
+            # while end_index < len(self.t_list) - 1 and \
+            #       self.t_list[end_index + 1] - self.t_list[end_index] < block_size * self.time_unit and \
+            #       np.sqrt(np.sum((self.traj[end_index + 1] - self.traj[end_index]) ** 2) / (self.t_list[end_index + 1] - self.t_list[end_index])) < 200:
+            #     end_index = end_index + 1
+            
+            
             while end_index < len(self.t_list) - 1 and \
-                  self.t_list[end_index + 1] - self.t_list[end_index] < block_size * self.time_unit and \
+                  self.t_list[end_index + 1] - self.t_list[end_index] < block_size * ((self.t_list[end_index] - self.t_list[start_index]) / (end_index - start_index + 1) if end_index != start_index else 1) and \
                   np.sqrt(np.sum((self.traj[end_index + 1] - self.traj[end_index]) ** 2) / (self.t_list[end_index + 1] - self.t_list[end_index])) < 200:
                 end_index = end_index + 1
             
@@ -618,7 +626,7 @@ class PILOTCCompressor(Compressor):
         utf = kwargs['utf'] if kwargs['utf'] != None else self.utf_default
         max_error = kwargs['max_error'] if kwargs['max_error'] != None else self.error_default
         accuracy = kwargs['accuracy'] if kwargs['accuracy'] != None else self.accuracy_default
-        save_path = self.save_path + f'_utf_{utf}_accuracy_{accuracy}_error_{max_error}_block_{kwargs['block_size']}_scale_{kwargs['scale_length']}'
+        save_path = self.save_path + f'_utf_{utf}_accuracy_{accuracy}_error_{max_error}_block_{kwargs['block_size']}_scale_{kwargs['scale_length']}_epsilon_{kwargs['epsilon']}'
         
         result_list = []
         with open(save_path, 'rb') as f:
@@ -642,7 +650,7 @@ class PILOTCCompressor(Compressor):
             
             if num != 0:
                 time_unit = self.time_unit
-                scale = self.scale_factor / max_error
+                scale = self.scale_factor / max_error if kwargs['epsilon'] == None else 0.5 / kwargs['epsilon'] / max_error
                 block_size = int(max_error * self.a + self.b) if kwargs['block_size'] == None else kwargs['block_size']
                 scale_length = min(1, self.c / math.sqrt(max_error)) if kwargs['scale_length'] == None else kwargs['scale_length']
             
@@ -866,7 +874,7 @@ class PILOTCNOENHANCEDZIGZAGCompressor(Compressor):
         while start_index < len(self.t_list):
             end_index = start_index
             while end_index < len(self.t_list) - 1 and \
-                  self.t_list[end_index + 1] - self.t_list[end_index] < block_size * self.time_unit and \
+                  self.t_list[end_index + 1] - self.t_list[end_index] < block_size * ((self.t_list[end_index] - self.t_list[start_index]) / (end_index - start_index + 1) if end_index != start_index else 1) and \
                   np.sqrt(np.sum((self.traj[end_index + 1] - self.traj[end_index]) ** 2) / (self.t_list[end_index + 1] - self.t_list[end_index])) < 200:
                 end_index = end_index + 1
             
@@ -2089,42 +2097,43 @@ def process_file(file_path,
                  utf,
                  accuracy,
                  block_size,
-                 scale_length,):
+                 scale_length,
+                 epsilon,):
     logs = f'{file_path}\n'
     
     result = []
     
-    squish_no_encode_compressor = SQUISHNOENCODECompressor(file_path, data_source)
-    # squish_no_encode_compressor.compress(max_error=max_error)
-    squish_no_encode_compressor.decompress(max_error=max_error)
-    squish_no_encode_result = squish_no_encode_compressor.evaluation_metrics(max_error)
-    # squish_no_encode_compressor.plot_traj()
-    logs += f"squish no encode performance: {squish_no_encode_result}\n"
-    result.append([squish_no_encode_compressor.name, squish_no_encode_result])
+    # squish_no_encode_compressor = SQUISHNOENCODECompressor(file_path, data_source)
+    # # squish_no_encode_compressor.compress(max_error=max_error)
+    # squish_no_encode_compressor.decompress(max_error=max_error)
+    # squish_no_encode_result = squish_no_encode_compressor.evaluation_metrics(max_error)
+    # # squish_no_encode_compressor.plot_traj()
+    # logs += f"squish no encode performance: {squish_no_encode_result}\n"
+    # result.append([squish_no_encode_compressor.name, squish_no_encode_result])
     
-    ciseds_no_encode_compressor = CISEDSNOENCODECompressor(file_path, data_source)
-    # ciseds_no_encode_compressor.compress(max_error=max_error)
-    ciseds_no_encode_compressor.decompress(max_error=max_error)
-    ciseds_no_encode_result = ciseds_no_encode_compressor.evaluation_metrics(max_error)
-    # ciseds_no_encode_compressor.plot_traj()
-    logs += f"cised s no encode performance: {ciseds_no_encode_result}\n"
-    result.append([ciseds_no_encode_compressor.name, ciseds_no_encode_result])
+    # ciseds_no_encode_compressor = CISEDSNOENCODECompressor(file_path, data_source)
+    # # ciseds_no_encode_compressor.compress(max_error=max_error)
+    # ciseds_no_encode_compressor.decompress(max_error=max_error)
+    # ciseds_no_encode_result = ciseds_no_encode_compressor.evaluation_metrics(max_error)
+    # # ciseds_no_encode_compressor.plot_traj()
+    # logs += f"cised s no encode performance: {ciseds_no_encode_result}\n"
+    # result.append([ciseds_no_encode_compressor.name, ciseds_no_encode_result])
     
-    cisedw_no_encode_compressor = CISEDWNOENCODECompressor(file_path, data_source)
-    # cisedw_no_encode_compressor.compress(max_error=max_error)
-    cisedw_no_encode_compressor.decompress(max_error=max_error)
-    cisedw_no_encode_result = cisedw_no_encode_compressor.evaluation_metrics(max_error)
-    # cisedw_no_encode_compressor.plot_traj()
-    logs += f"cised w no encode performance: {cisedw_no_encode_result}\n"
-    result.append([cisedw_no_encode_compressor.name, cisedw_no_encode_result])
+    # cisedw_no_encode_compressor = CISEDWNOENCODECompressor(file_path, data_source)
+    # # cisedw_no_encode_compressor.compress(max_error=max_error)
+    # cisedw_no_encode_compressor.decompress(max_error=max_error)
+    # cisedw_no_encode_result = cisedw_no_encode_compressor.evaluation_metrics(max_error)
+    # # cisedw_no_encode_compressor.plot_traj()
+    # logs += f"cised w no encode performance: {cisedw_no_encode_result}\n"
+    # result.append([cisedw_no_encode_compressor.name, cisedw_no_encode_result])
     
-    pilotc_no_enhanced_compressor = PILOTCNOENHANCEDZIGZAGCompressor(file_path, data_source)
-    # pilotc_no_enhanced_compressor.compress(max_error=max_error, utf=utf, accuracy=accuracy, block_size=block_size, scale_length=scale_length)
-    pilotc_no_enhanced_compressor.decompress(max_error=max_error, utf=utf, accuracy=accuracy, block_size=block_size, scale_length=scale_length)
-    pilotc_no_enhanced_result = pilotc_no_enhanced_compressor.evaluation_metrics(max_error)
-    # pilotc_no_enhanced_compressor.plot_traj()
-    logs += f"cised w no encode performance: {pilotc_no_enhanced_result}\n"
-    result.append([pilotc_no_enhanced_compressor.name, pilotc_no_enhanced_result])
+    # pilotc_no_enhanced_compressor = PILOTCNOENHANCEDZIGZAGCompressor(file_path, data_source)
+    # # pilotc_no_enhanced_compressor.compress(max_error=max_error, utf=utf, accuracy=accuracy, block_size=block_size, scale_length=scale_length)
+    # pilotc_no_enhanced_compressor.decompress(max_error=max_error, utf=utf, accuracy=accuracy, block_size=block_size, scale_length=scale_length)
+    # pilotc_no_enhanced_result = pilotc_no_enhanced_compressor.evaluation_metrics(max_error)
+    # # pilotc_no_enhanced_compressor.plot_traj()
+    # logs += f"cised w no encode performance: {pilotc_no_enhanced_result}\n"
+    # result.append([pilotc_no_enhanced_compressor.name, pilotc_no_enhanced_result])
     
     squish_compressor = SQUISHCompressor(file_path, data_source)
     # squish_compressor.compress(max_error=max_error, utf=utf, accuracy=accuracy)
@@ -2151,8 +2160,8 @@ def process_file(file_path,
     result.append([cisedw_compressor.name, cisedw_result])
     
     pilotc_compressor = PILOTCCompressor(file_path, data_source)
-    # pilotc_compressor.compress(max_error=max_error, utf=utf, accuracy=accuracy, block_size=block_size, scale_length=scale_length)
-    pilotc_compressor.decompress(max_error=max_error, utf=utf, accuracy=accuracy, block_size=block_size, scale_length=scale_length)
+    # pilotc_compressor.compress(max_error=max_error, utf=utf, accuracy=accuracy, block_size=block_size, scale_length=scale_length, epsilon=epsilon)
+    pilotc_compressor.decompress(max_error=max_error, utf=utf, accuracy=accuracy, block_size=block_size, scale_length=scale_length, epsilon=epsilon)
     pilotc_result = pilotc_compressor.evaluation_metrics(max_error)
     # pilotc_compressor.plot_traj()
     logs += f"pilot c performance: {pilotc_result}\n"
@@ -2163,6 +2172,7 @@ def process_file(file_path,
 
 def main():
     data_sources = ['nuplan', 'geolife', 'mopsi']
+    # data_sources = ['geolife_3d']
     
     title = {'nuplan': '(1) nuPlan', 'geolife': '(2) GeoLife', 'mopsi': '(3) Mopsi', 'geolife_3d': 'GeoLife-3D'}
     
@@ -2175,8 +2185,12 @@ def main():
     
     plt.rcParams['font.size'] = 16
     fig, axs = plt.subplots(1, len(data_sources))
+    # fig, axs = plt.subplots(1, 1)
     fig.set_figwidth(20)
-    fig.set_figheight(4.5)
+    # fig.set_figwidth(7)
+    fig.set_figheight(4)
+    # fig.set_figheight(4.5)
+    # fig.set_figheight(5)
     
     for i in range(len(data_sources)):
         data_source = data_sources[i]
@@ -2219,31 +2233,34 @@ def main():
         multiprocessing_flag = True
         
         test_utf = [None]
-        test_utf = [2, 3, 4, 5, 6, 7, 8]
+        # test_utf = [2, 3, 4, 5, 6, 7, 8]
         
         test_error = [None]
-        # test_error = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100] if data_source != 'nuplan' else [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        test_error = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100] if data_source != 'nuplan' else [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         
         test_accuracy = [None]
         # test_accuracy = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
         
         test_scale = [None]
         # test_scale = [2 ** -7, 2 ** -6, 2 ** -5, 2 ** -4, 2 ** -3, 2 ** -2, 2 ** -1, 2 ** 0]
-        # test_scale_x = [-7, -6, -5, -4, -3, -2, -1, 0]
-        # test_scale_labels = [r'$2^{-7}$', r'$2^{-6}$', r'$2^{-5}$', r'$2^{-4}$', r'$2^{-3}$', r'$2^{-2}$', r'$2^{-1}$', r'$2^{0}$']
+        test_scale_x = [-7, -6, -5, -4, -3, -2, -1, 0]
+        test_scale_labels = [r'$2^{-7}$', r'$2^{-6}$', r'$2^{-5}$', r'$2^{-4}$', r'$2^{-3}$', r'$2^{-2}$', r'$2^{-1}$', r'$2^{0}$']
         
         test_block_size = [None]
         # test_block_size = [25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300]
         
+        test_epsilon = [None]
+        # test_epsilon = [1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
+        
         data = {}
         data2 = {}
         
-        temp = [0, 0, 0]
+        temp = [0, 0, 0, 0]
         
-        combinations = itertools.product(test_utf, test_error, test_accuracy, test_scale, test_block_size)
+        combinations = itertools.product(test_utf, test_error, test_accuracy, test_scale, test_block_size, test_epsilon)
         
         for combination in combinations:
-            utf, error, accuracy, scale_length, block_size = combination
+            utf, error, accuracy, scale_length, block_size, epsilon = combination
             global_counter = Global_Counter()
             results = []
             logs = ''
@@ -2258,7 +2275,8 @@ def main():
                                                                 utf,
                                                                 accuracy,
                                                                 block_size,
-                                                                scale_length,))
+                                                                scale_length,
+                                                                epsilon,))
                         pool_results.append(result)
                     
                     for result in pool_results:
@@ -2267,17 +2285,14 @@ def main():
                         logs += log
             else:
                 for ff in tot_path:
-                    if ff not in ['/home/wkf/data/PRESS/datasets/geolife/traj_001.txt',
-                                ]:
-                        continue
-                    
                     result, log = process_file(ff,
                                             data_source,
                                             error,
                                             utf,
                                             accuracy,
                                             block_size,
-                                            scale_length,)
+                                            scale_length,
+                                            epsilon,)
                     results.extend(result)
                     logs += log
                 
@@ -2288,15 +2303,22 @@ def main():
                 if key not in data:
                     data[key] = []
                     data2[key] = []
-                data[key].append(1 / global_counter.counter[key]['compress_ratio'] * 100)
-                # data[key].append(global_counter.counter[key]['mean_error'])
+                # data[key].append(1 / global_counter.counter[key]['compress_ratio'] * 100)
+                # data[key].append(np.log10(1 / global_counter.counter[key]['compress_ratio'] * 100))
+                data[key].append(global_counter.counter[key]['mean_error'])
                 # data[key].append(global_counter.counter[key]['total_error_cnt'] / global_counter.counter[key]['total_length'] * 100)
-                # data2[key].append(np.log10(global_counter.counter[key]['total_error_cnt'] / global_counter.counter[key]['total_length'] * 100) + 3)
+                # data2[key].append((3 if data_source =='nuplan' else 2) + np.log10(global_counter.counter[key]['total_error_cnt'] / global_counter.counter[key]['total_length'] * 100))
+                # data2[key].append(3 + np.log10(global_counter.counter[key]['total_error_cnt'] / global_counter.counter[key]['total_length'] * 100))
             
             
-            # temp[0] += global_counter.counter['SQUISH-E']['compress_ratio'] / global_counter.counter['SQUISH-E-No-Encode']['compress_ratio']
-            # temp[1] += global_counter.counter['CISED-S']['compress_ratio'] / global_counter.counter['CISED-S-No-Encode']['compress_ratio']
-            # temp[2] += global_counter.counter['CISED-W']['compress_ratio'] / global_counter.counter['CISED-W-No-Encode']['compress_ratio']
+            # temp[0] += global_counter.counter['SQUISH-E']['mean_error'] / global_counter.counter['PILOT-C']['mean_error']
+            # temp[1] += global_counter.counter['CISED-S']['mean_error'] / global_counter.counter['PILOT-C']['mean_error']
+            # temp[2] += global_counter.counter['CISED-W']['mean_error'] / global_counter.counter['PILOT-C']['mean_error']
+            # temp[3] += global_counter.counter['PILOT-C']['mean_error'] / global_counter.counter['PILOT-C-No-Enhanced-Zigzag']['mean_error']
+            
+            print(combination)
+            for key in global_counter.counter:
+                print(key, global_counter.counter[key]['var_error'])
             
             if multiprocessing_flag:
                 with open(f'logs/{data_source}_error_{error}_utf_{utf}_accuracy_{accuracy}.txt', 'w') as f:
@@ -2306,70 +2328,62 @@ def main():
                 print(logs)
                 print(global_counter.get_result())
         
+        # for key in data:
+        #     axs.plot(np.array(test_block_size), data[key], label=data_source, color=color[data_source], linestyle=linestyle[data_source], marker=markerstyle[data_source], markerfacecolor='none')
+        
         # print(data_source, temp)
         
         for key in data:
-            axs[i].plot(np.array(test_utf) - 1, data[key], label=key, color=color[key], linestyle=linestyle[key], marker=markerstyle[key], markerfacecolor='none')
-        # axs[i].legend(loc='upper right', fontsize=12)
-        # axs[i].legend(loc='upper left', fontsize=12)
-        # axs[i].legend(loc='lower right', fontsize=12)
-        # axs[i].set_xlabel(r'$\epsilon$ (meters)')
-        axs[i].set_xlabel(r'length of the chunks (bits)')
+            axs[i].plot(np.array(test_error), data[key], label=key, color=color[key], linestyle=linestyle[key], marker=markerstyle[key], markerfacecolor='none')
+            # axs[i].plot(np.array(test_epsilon), data[key], label='Compression ratio', color=color[key], linestyle=linestyle[key], marker=markerstyle[key], markerfacecolor='none')
+        axs[i].set_xlabel(r'$\epsilon$ (meters)')
+        # axs[i].set_xlabel(r'Length of the chunks (bits)')
         # axs[i].set_xlabel(r'$\epsilon_p$ ($\times \epsilon$ meters)')
+        # axs[i].set_xlabel(r'$\epsilon_f$ ($\times \epsilon$ meters)')
         # axs[i].set_xlabel(r'$r_{ret}$')
-        # axs[i].set_xlabel(r'$b_s$')
-        axs[i].set_ylabel('Compression Ratio (%)')
-        # axs[i].set_ylabel('Average error (meters)')
-        # axs[i].set_ylabel('Percentage of Error Points (%)')
+        # axs[i].set_ylabel('Compression ratio (%)')
+        axs[i].set_ylabel('Average error (meters)')
         axs[i].set_title(title[data_source])
-        # axs[i].tight_layout()
+        # if data_source == 'nuplan':
+        #     axs[i].set_yticks([0.10, 0.11, 0.12, 0.13])
+        
         # axs[i].set_ylim(bottom = 0)
         # if data_source != 'nuplan':
         #     axs[i].set_yticks([-0.5, 0, 0.5, 1], [r'$10^{-0.5}$', r'$10^{0}$', r'$10^{0.5}$', r'$10^{1}$'])
         # else:
         #     axs[i].set_yticks([-1, -0.5, 0, 0.5], [r'$10^{-1}$', r'$10^{-0.5}$', r'$10^{0}$', r'$10^{0.5}$'])
+        lines, labels = axs[i].get_legend_handles_labels()
+        # axs[i].set_xticks(test_scale_x, test_scale_labels)
+        
+        # axs[i].tick_params(axis='y')
+        # ax2 = axs[i].twinx()
+        # ax2.set_ylabel('Percentage of error points (%)')
+        # for key in data2:
+        #     ax2.bar(test_epsilon, data2[key], color='b', alpha=0.6, width=0.05, label='Percentage of error points')
+        # ax2.tick_params(axis='y')
+        # if data_source != 'nuplan':
+        #     ax2.set_yticks([0, 1, 2, 3], [r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$', r'$10^{1}$'])
+        # else:
+        #     ax2.set_yticks([0, 1, 2, 3], [r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$'])
+        # # ax2.set_yticks([0, 1, 2, 3, 4], [r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$', r'$10^{1}$'])
+        
+        # lines2, labels2 = ax2.get_legend_handles_labels()
+        # lines.extend(lines2)
+        # labels.extend(labels2)
+    
+    # axs.legend(loc='upper left', fontsize=12)
+    # axs.set_xlabel(r'$b_s$')
+    # axs.set_ylabel('Compression ratio (%)')
     
     plt.tight_layout()
-    lines, labels = fig.axes[-1].get_legend_handles_labels()   
-    fig.legend(lines, labels, loc = 'upper center', ncol=4, bbox_to_anchor=(0.5, 1))
-    plt.subplots_adjust(left=0.06, right=0.99, top=0.8, bottom=0.15)
-    plt.savefig(f'images/test_utf.pdf')
-    
-    # for data_source in data_sources:
-    #     data = np.loadtxt(f'{data_source}.txt', dtype=np.float64)
-    #     plt.plot(np.array(test_block_size), data, label=data_source, color=color[data_source], linestyle=linestyle[data_source], marker=markerstyle[data_source], markerfacecolor='none')
-    
-    # plt.legend(loc='upper left', fontsize=12)
-    # plt.xlabel(r'$b_s$')
-    # plt.ylabel('Compression Ratio (%)')
-    # plt.tight_layout()
-    # plt.ylim(bottom = 0)
-    # plt.savefig(f'images/test_b_s.pdf')
-    
-    
-    # fig, ax1 = plt.subplots()
-    # ax2 = ax1.twinx()
- 
-    # for key in data:
-    #     ax1.set_xlabel(r'$r_{ret}$')
-    #     ax1.set_ylabel('Compression Ratio (%)')
-    #     ax1.plot(test_scale_x, data[key], color='r', linestyle=linestyle[key], marker=markerstyle[key], markerfacecolor='none', label='Compression Ratio')
-    #     ax1.tick_params(axis='y')
-    #     ax1.set_ylim(bottom=0)
-        
-    #     ax2.set_ylabel('Percentage of Error Points (%)')
-    #     ax2.bar(test_scale_x, data2[key], color='b', alpha=0.6, width=0.3, label='Percentage of Error Points')
-    #     ax2.set_ylim(bottom=0, top=4)
-    #     ax2.tick_params(axis='y')
-    #     ax2.set_yticks([0, 1, 2, 3, 4], [r'$10^{-3}$', r'$10^{-2}$', r'$10^{-1}$', r'$10^{0}$', r'$10^{1}$'])
-    
-    # # 添加图例
-    # plt.xticks(test_scale_x, test_scale_labels)
-    # plt.xlim(left=-7.5, right=0.5)
-    # plt.title('(3) Mopsi')
-    # fig.tight_layout()
-    # plt.legend(loc='upper right')
-    # plt.savefig(f'images/test_r_ret_{data_source}.pdf')
+    # fig.legend(lines, labels, loc = 'upper center', ncol=4, bbox_to_anchor=(0.5, 1))
+    plt.subplots_adjust(left=0.06, right=0.99, top=0.9, bottom=0.17)
+    # plt.subplots_adjust(left=0.06, right=0.99, top=0.8, bottom=0.15)
+    # plt.subplots_adjust(left=0.06, right=0.99, top=0.75, bottom=0.13)
+    # plt.subplots_adjust(left=0.06, right=0.95, top=0.9, bottom=0.17)
+    # plt.subplots_adjust(left=0.06, right=0.95, top=0.8, bottom=0.15)
+    # plt.subplots_adjust(left=0.12, right=0.99, top=0.99, bottom=0.17)
+    # plt.savefig(f'images/test_average_error.pdf')
 
 if __name__ == '__main__':
     main()

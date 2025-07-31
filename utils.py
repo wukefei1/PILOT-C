@@ -190,7 +190,10 @@ class Global_Counter:
                                'compress_ratio': 0,
                                'total_length': 0,
                                'total_count': 0,
-                               'total_error_cnt': 0}
+                               'total_error_cnt': 0,
+                               'var_error': 0,
+                               }
+        self.counter[key]['var_error'] = (self.counter[key]['total_length'] * self.counter[key]['var_error'] + data['length'] * data['var_error']) / (self.counter[key]['total_length'] + data['length']) + data['length'] * self.counter[key]['total_length'] * ((self.counter[key]['mean_error'] - data['mean_error']) / (self.counter[key]['total_length'] + data['length'])) ** 2
         self.counter[key]['mean_error'] = (self.counter[key]['mean_error'] * (self.counter[key]['total_length']) + data['mean_error'] * data['length']) / (self.counter[key]['total_length'] + data['length'])
         self.counter[key]['max_error'] = max(self.counter[key]['max_error'], data['max_error'])
         self.counter[key]['compress_ratio'] = (self.counter[key]['compress_ratio'] * (self.counter[key]['total_length']) + data['compress_ratio'] * data['length']) / (self.counter[key]['total_length'] + data['length'])
